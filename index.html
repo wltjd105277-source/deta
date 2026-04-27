@@ -1073,21 +1073,47 @@ function render() {
     </div>
   `;
 
-  // 상품 순위 (사이트별 필터 적용) - 전체 상품 표시
-  const allProducts = filterCh
+  // 상품 순위 (사이트별 필터 + 일별/월별 토글)
+  // 일별 상품
+  const productsDaily = filterCh
+    ? (dayData[subChannelGroup]?._products_by_channel?.[filterCh] || [])
+    : (() => {
+        const map = {};
+        viewChannels.forEach(c => {
+          (dayData[c]?._products_today || []).forEach(p => {
+            if (!map[p.name]) map[p.name] = { name: p.name, qty: 0, revenue_amount: 0, cost_amount: 0 };
+            map[p.name].qty += p.qty;
+            map[p.name].revenue_amount += p.revenue_amount;
+            map[p.name].cost_amount += p.cost_amount;
+          });
+        });
+        return Object.values(map);
+      })();
+  // 월별 상품 (기존)
+  const productsMonthly = filterCh
     ? (dayData[subChannelGroup]?._monthly_products_by_channel?.[filterCh] || [])
     : mergedProducts(viewChannels.map(c => dayData[c]).filter(Boolean));
+  // 기본은 월별
+  let prodPeriod = 'monthly';
+  let prodSort = 'revenue';
+  const getProds = () => prodPeriod === 'daily' ? productsDaily : productsMonthly;
   html += `
     <div class="panel">
       <div class="panel-title">
-        <span>🏆 상품별 월 누적 판매 ${filterCh ? `<span style="color:var(--primary);font-size:13px;">(${filterCh})</span> ` : ''}<span style="color:var(--text-sub);font-size:12px;font-weight:500;">총 ${allProducts.length}개</span></span>
-        <div class="actions">
-          <span class="seg active" data-sort="revenue" data-target="prodTable">매출순</span>
-          <span class="seg" data-sort="qty" data-target="prodTable">수량순</span>
+        <span id="prodTitle">🏆 상품별 ${prodPeriod === 'daily' ? '일' : '월 누적'} 판매 ${filterCh ? `<span style="color:var(--primary);font-size:13px;">(${filterCh})</span> ` : ''}<span style="color:var(--text-sub);font-size:12px;font-weight:500;">총 ${getProds().length}개</span></span>
+        <div class="actions" style="display:flex;gap:6px;">
+          <div style="display:flex;gap:0;background:var(--bg);border-radius:6px;padding:2px;">
+            <span class="seg" data-period="daily" data-target="prodPeriod" style="border:none;${prodPeriod==='daily'?'background:var(--primary);color:white;':''}">일별</span>
+            <span class="seg" data-period="monthly" data-target="prodPeriod" style="border:none;${prodPeriod==='monthly'?'background:var(--primary);color:white;':''}">월별</span>
+          </div>
+          <div style="display:flex;gap:0;background:var(--bg);border-radius:6px;padding:2px;">
+            <span class="seg" data-sort="revenue" data-target="prodTable" style="border:none;${prodSort==='revenue'?'background:var(--primary);color:white;':''}">매출순</span>
+            <span class="seg" data-sort="qty" data-target="prodTable" style="border:none;${prodSort==='qty'?'background:var(--primary);color:white;':''}">수량순</span>
+          </div>
         </div>
       </div>
       <div id="prodTableWrap">
-        ${buildProductTable(allProducts, 'revenue')}
+        ${buildProductTable(getProds(), prodSort, prodPeriod)}
       </div>
     </div>
   `;
@@ -1114,11 +1140,35 @@ function render() {
       drawTrendChart(trendData, el.dataset.metric);
     });
   });
+  // 상품 테이블 - 일별/월별 토글
+  document.querySelectorAll('[data-target="prodPeriod"]').forEach(el => {
+    el.addEventListener('click', () => {
+      prodPeriod = el.dataset.period;
+      // 활성 스타일 갱신
+      el.parentElement.querySelectorAll('.seg').forEach(s => {
+        s.style.background = ''; s.style.color = '';
+      });
+      el.style.background = 'var(--primary)';
+      el.style.color = 'white';
+      // 제목 갱신
+      const prods = getProds();
+      const titleEl = document.getElementById('prodTitle');
+      if (titleEl) {
+        titleEl.innerHTML = `🏆 상품별 ${prodPeriod === 'daily' ? '일' : '월 누적'} 판매 ${filterCh ? `<span style="color:var(--primary);font-size:13px;">(${filterCh})</span> ` : ''}<span style="color:var(--text-sub);font-size:12px;font-weight:500;">총 ${prods.length}개</span>`;
+      }
+      document.getElementById('prodTableWrap').innerHTML = buildProductTable(prods, prodSort, prodPeriod);
+    });
+  });
+  // 매출순/수량순 토글
   document.querySelectorAll('[data-target="prodTable"]').forEach(el => {
     el.addEventListener('click', () => {
-      el.parentElement.querySelectorAll('.seg').forEach(s => s.classList.remove('active'));
-      el.classList.add('active');
-      document.getElementById('prodTableWrap').innerHTML = buildProductTable(allProducts, el.dataset.sort);
+      prodSort = el.dataset.sort;
+      el.parentElement.querySelectorAll('.seg').forEach(s => {
+        s.style.background = ''; s.style.color = '';
+      });
+      el.style.background = 'var(--primary)';
+      el.style.color = 'white';
+      document.getElementById('prodTableWrap').innerHTML = buildProductTable(getProds(), prodSort, prodPeriod);
     });
   });
 }
@@ -1244,20 +1294,21 @@ function mergedProducts(slots) {
   return Object.values(map);
 }
 
-function buildProductTable(products, sortBy) {
+function buildProductTable(products, sortBy, period) {
   const sorted = [...products].sort((a,b) => (b[sortBy === 'qty' ? 'qty' : 'revenue_amount']) - (a[sortBy === 'qty' ? 'qty' : 'revenue_amount']));
   const totalRev = products.reduce((s,p) => s + (p.revenue_amount || 0), 0);
   if (!sorted.length) {
     return '<div style="padding:40px;text-align:center;color:var(--text-sub);font-size:13px;">판매된 상품이 없습니다</div>';
   }
+  const prefix = period === 'daily' ? '일' : '월';
   return `<div style="max-height:600px;overflow-y:auto;border-radius:8px;">
     <table>
       <thead style="position:sticky;top:0;z-index:1;">
         <tr>
           <th style="width:40px;">#</th>
           <th>상품명</th>
-          <th class="num">월 수량</th>
-          <th class="num">월 매출 (납품가)</th>
+          <th class="num">${prefix} 수량</th>
+          <th class="num">${prefix} 매출 (납품가)</th>
           <th class="num">매출 비중</th>
           <th class="num">예상 마진</th>
         </tr>
