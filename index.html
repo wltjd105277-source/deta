@@ -261,6 +261,97 @@
 
   .compare-toggle { font-size: 12px; color: var(--primary); cursor: pointer; }
   .file-tag { display: inline-block; font-size: 11px; padding: 2px 6px; border-radius: 4px; margin: 2px; background: var(--bg); }
+
+  /* ── 누락 경고 클릭 가능 ── */
+  .missing-link { cursor: pointer; text-decoration: underline; text-decoration-style: dotted; }
+  .missing-link:hover { opacity: 0.8; }
+
+  /* ── 달력 모달 ── */
+  .modal-overlay {
+    position: fixed; inset: 0;
+    background: rgba(15, 18, 35, 0.55);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 2000;
+    animation: fadeIn 0.18s ease-out;
+  }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  .modal-card {
+    background: var(--card);
+    border-radius: 14px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+    width: min(480px, 92vw);
+    max-height: 88vh;
+    overflow: auto;
+    animation: slideUp 0.22s ease-out;
+  }
+  @keyframes slideUp { from { transform: translateY(8px); opacity: 0.6; } to { transform: translateY(0); opacity: 1; } }
+  .modal-head {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 18px 22px 12px;
+  }
+  .modal-head h3 { font-size: 16px; font-weight: 700; }
+  .modal-head .close-btn {
+    width: 28px; height: 28px; border-radius: 6px; border: none;
+    background: var(--bg); cursor: pointer; font-size: 18px;
+    color: var(--text-sub);
+  }
+  .modal-head .close-btn:hover { background: var(--border); color: var(--text); }
+  .modal-body { padding: 4px 22px 22px; }
+
+  .cal-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 6px;
+    margin: 12px 0 14px;
+  }
+  .cal-dow {
+    text-align: center; font-size: 11px; font-weight: 600;
+    color: var(--text-sub); padding: 6px 0;
+  }
+  .cal-dow.sun { color: var(--danger); }
+  .cal-dow.sat { color: var(--info, #3b82f6); }
+  .cal-cell {
+    aspect-ratio: 1;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    border: 1px solid var(--border);
+    position: relative;
+  }
+  .cal-cell.empty { border: none; }
+  .cal-cell.uploaded {
+    background: var(--success-light); color: var(--success);
+    border-color: var(--success);
+  }
+  .cal-cell.missing {
+    background: var(--danger-light); color: var(--danger);
+    border-color: var(--danger);
+  }
+  .cal-cell.future {
+    background: var(--bg); color: var(--text-sub);
+    border-style: dashed;
+  }
+  .cal-cell.today { box-shadow: 0 0 0 2px var(--primary); }
+  .cal-cell .mark { font-size: 11px; line-height: 1; margin-top: 2px; }
+
+  .cal-legend {
+    display: flex; gap: 16px; flex-wrap: wrap;
+    font-size: 12px; color: var(--text-sub);
+    padding-top: 10px; border-top: 1px solid var(--border);
+  }
+  .cal-legend-item { display: flex; align-items: center; gap: 6px; }
+  .cal-swatch { width: 14px; height: 14px; border-radius: 4px; border: 1px solid; }
+  .cal-swatch.uploaded { background: var(--success-light); border-color: var(--success); }
+  .cal-swatch.missing { background: var(--danger-light); border-color: var(--danger); }
+  .cal-swatch.future { background: var(--bg); border-color: var(--border); border-style: dashed; }
+  .cal-summary {
+    display: flex; justify-content: space-around;
+    padding: 10px; background: var(--bg); border-radius: 8px;
+    margin-bottom: 8px; font-size: 12px;
+  }
+  .cal-summary div { text-align: center; }
+  .cal-summary .num { font-size: 16px; font-weight: 700; display: block; }
 </style>
 </head>
 <body>
@@ -308,6 +399,8 @@
 </div>
 
 <div class="toast" id="toast"></div>
+
+<div id="calendarModal" style="display:none;"></div>
 
 <script>
 // ================================================================
@@ -994,7 +1087,7 @@ function render() {
     <div class="kpi-card">
       <div class="label">월 누적 매출 <span style="color:${isAccuShort ? 'var(--warning)' : 'var(--success)'};font-size:11px;font-weight:500;margin-left:6px;">${accuDayCount}일치 누적 / ${todayOfMonth}일 중</span></div>
       <div class="value">${fmt.shortWon(agg.monthly_revenue)}</div>
-      <div class="sub">${agg.monthly_goal ? `목표 ${fmt.shortWon(agg.monthly_goal)} / 달성 ${fmt.pct(agg.month_achievement)}` : (isAccuShort ? `<span style="color:var(--warning);">⚠ ${todayOfMonth - accuDayCount}일치 데이터 누락 - 누락된 날짜 판매현황을 추가 업로드하면 정확해집니다</span>` : '월 누적 정상')}</div>
+      <div class="sub">${agg.monthly_goal ? `목표 ${fmt.shortWon(agg.monthly_goal)} / 달성 ${fmt.pct(agg.month_achievement)}` : (isAccuShort ? `<span class="missing-link" data-show-calendar="1" style="color:var(--warning);">⚠ ${todayOfMonth - accuDayCount}일치 데이터 누락 - 클릭해서 누락 일자 확인</span>` : '월 누적 정상')}</div>
       <div class="progress-bar"><div class="progress-fill ${achClass(agg.month_achievement, agg.day_progress || 1)}" style="width:${Math.min((agg.month_achievement || 0) * 100, 100)}%"></div></div>
     </div>
     <div class="kpi-card">
@@ -1450,6 +1543,105 @@ function drawTrendChart(trendData, metric) {
     }
   });
 }
+
+// ================================================================
+// 누락 일자 달력 모달
+// ================================================================
+function showMissingCalendar() {
+  if (!currentDate) return;
+  const month = currentDate.slice(0, 7);
+  const [yy, mm] = month.split('-').map(Number);
+  const totalDays = new Date(yy, mm, 0).getDate();
+  const firstDay = new Date(yy, mm - 1, 1).getDay();  // 0=일 ~ 6=토
+
+  // 활성 채널그룹들 (전체/쿠팡/샵N + 사이트별 필터 시는 그 그룹)
+  const channels = Object.keys(store[currentDate] || {});
+  const isSubChannel = currentChannel !== 'all' && !channels.includes(currentChannel);
+  const subToGroup = {};
+  for (const cg of channels) {
+    (GROUP_CHANNELS[cg] || []).forEach(ch => subToGroup[ch] = cg);
+  }
+  const viewChannels = currentChannel === 'all' ? channels
+                     : isSubChannel ? [subToGroup[currentChannel]]
+                     : [currentChannel];
+
+  // 어떤 일자에 데이터가 있는지
+  const uploaded = new Set();
+  for (const d of Object.keys(store)) {
+    if (!d.startsWith(month)) continue;
+    if (viewChannels.some(cg => store[d][cg])) uploaded.add(parseInt(d.slice(8, 10)));
+  }
+
+  const today = new Date();
+  const isCurrentMonth = today.getFullYear() === yy && (today.getMonth() + 1) === mm;
+  const todayD = isCurrentMonth ? today.getDate() : totalDays;
+  const viewingD = parseInt(currentDate.slice(8, 10));
+
+  const cells = [];
+  for (let i = 0; i < firstDay; i++) cells.push('<div class="cal-cell empty"></div>');
+  let uploadedCount = 0, missingCount = 0, futureCount = 0;
+  for (let d = 1; d <= totalDays; d++) {
+    let cls = 'cal-cell';
+    let mark = '';
+    if (uploaded.has(d)) { cls += ' uploaded'; mark = '✓'; uploadedCount++; }
+    else if (d <= todayD) { cls += ' missing'; mark = '⚠'; missingCount++; }
+    else { cls += ' future'; mark = ''; futureCount++; }
+    if (d === viewingD) cls += ' today';
+    cells.push(`<div class="${cls}"><span>${d}</span>${mark ? `<span class="mark">${mark}</span>` : ''}</div>`);
+  }
+
+  const cgLabel = currentChannel === 'all' ? '전체' : currentChannel;
+  const html = `
+    <div class="modal-overlay" id="modalOverlay">
+      <div class="modal-card" onclick="event.stopPropagation()">
+        <div class="modal-head">
+          <h3>📅 ${yy}년 ${mm}월 업로드 현황 <span style="font-size:12px;color:var(--text-sub);font-weight:500;margin-left:6px;">(${cgLabel})</span></h3>
+          <button class="close-btn" id="modalClose">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="cal-summary">
+            <div><span class="num" style="color:var(--success);">${uploadedCount}</span><span>업로드됨</span></div>
+            <div><span class="num" style="color:var(--danger);">${missingCount}</span><span>누락</span></div>
+            <div><span class="num" style="color:var(--text-sub);">${futureCount}</span><span>예정</span></div>
+          </div>
+          <div class="cal-grid">
+            <div class="cal-dow sun">일</div>
+            <div class="cal-dow">월</div>
+            <div class="cal-dow">화</div>
+            <div class="cal-dow">수</div>
+            <div class="cal-dow">목</div>
+            <div class="cal-dow">금</div>
+            <div class="cal-dow sat">토</div>
+            ${cells.join('')}
+          </div>
+          <div class="cal-legend">
+            <div class="cal-legend-item"><div class="cal-swatch uploaded"></div>업로드됨</div>
+            <div class="cal-legend-item"><div class="cal-swatch missing"></div>누락 (오늘 이전)</div>
+            <div class="cal-legend-item"><div class="cal-swatch future"></div>예정 (미래)</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  const wrap = document.getElementById('calendarModal');
+  wrap.style.display = '';
+  wrap.innerHTML = html;
+  const overlay = document.getElementById('modalOverlay');
+  overlay.addEventListener('click', closeMissingCalendar);
+  document.getElementById('modalClose').addEventListener('click', closeMissingCalendar);
+}
+function closeMissingCalendar() {
+  const wrap = document.getElementById('calendarModal');
+  wrap.style.display = 'none';
+  wrap.innerHTML = '';
+}
+// 누락 경고 클릭 시 달력 표시 (이벤트 위임)
+document.body.addEventListener('click', e => {
+  if (e.target.closest('[data-show-calendar]')) {
+    e.preventDefault();
+    showMissingCalendar();
+  }
+});
 
 // ================================================================
 // 사이드바 액션
