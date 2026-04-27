@@ -942,6 +942,20 @@ function render() {
     ? aggregateForSubChannel(dayData[subChannelGroup], filterCh)
     : aggregateChannels(viewChannels.map(c => dayData[c].detail).filter(Boolean));
 
+  // 월 누적 일수 계산
+  const accuMonth = currentDate.slice(0, 7);
+  const accuDates = new Set();
+  for (const d of Object.keys(store)) {
+    if (!d.startsWith(accuMonth)) continue;
+    if (viewChannels.some(cg => store[d][cg])) accuDates.add(d);
+  }
+  const accuDayCount = accuDates.size;
+  const [accuYY, accuMM] = accuMonth.split('-').map(Number);
+  const accuTotalDays = new Date(accuYY, accuMM, 0).getDate();
+  const todayOfMonth = parseInt(currentDate.slice(8, 10));
+  const expectedDays = todayOfMonth;  // 오늘까지 있어야 함
+  const isAccuShort = accuDayCount < expectedDays;
+
   // 월 목표 설정 패널 (판매현황 기반 데이터에 한해, 사이트별 필터 시는 숨김)
   const monthKey = currentDate.slice(0, 7);
   const goalGroups = viewChannels.filter(cg => store[currentDate][cg]?._source === '판매현황');
@@ -971,9 +985,9 @@ function render() {
       <div class="progress-bar"><div class="progress-fill ${achClass(agg.daily_achievement, 1)}" style="width:${Math.min((agg.daily_achievement || 0) * 100, 100)}%"></div></div>
     </div>
     <div class="kpi-card">
-      <div class="label">월 누적 매출</div>
+      <div class="label">월 누적 매출 <span style="color:${isAccuShort ? 'var(--warning)' : 'var(--success)'};font-size:11px;font-weight:500;margin-left:6px;">${accuDayCount}일치 누적 / ${todayOfMonth}일 중</span></div>
       <div class="value">${fmt.shortWon(agg.monthly_revenue)}</div>
-      <div class="sub">목표 ${fmt.shortWon(agg.monthly_goal)} / 달성 ${fmt.pct(agg.month_achievement)}</div>
+      <div class="sub">${agg.monthly_goal ? `목표 ${fmt.shortWon(agg.monthly_goal)} / 달성 ${fmt.pct(agg.month_achievement)}` : (isAccuShort ? `<span style="color:var(--warning);">⚠ ${todayOfMonth - accuDayCount}일치 데이터 누락 - 누락된 날짜 판매현황을 추가 업로드하면 정확해집니다</span>` : '월 누적 정상')}</div>
       <div class="progress-bar"><div class="progress-fill ${achClass(agg.month_achievement, agg.day_progress || 1)}" style="width:${Math.min((agg.month_achievement || 0) * 100, 100)}%"></div></div>
     </div>
     <div class="kpi-card">
