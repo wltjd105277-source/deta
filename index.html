@@ -333,6 +333,13 @@
     background: var(--bg); color: var(--text-sub);
     border-style: dashed;
   }
+  .cal-cell.holiday {
+    background: #f1f5f9; color: #64748b;
+    border-color: #cbd5e1;
+  }
+  .cal-cell.holiday.weekend { /* 자동 주말 */ background: #fef9e7; color: #ca8a04; border-color: #fde68a; }
+  .cal-cell { cursor: pointer; transition: transform 0.1s, box-shadow 0.1s; }
+  .cal-cell:hover:not(.empty):not(.future) { transform: translateY(-1px); box-shadow: 0 2px 6px rgba(0,0,0,0.08); }
   .cal-cell.today { box-shadow: 0 0 0 2px var(--primary); }
   .cal-cell .mark { font-size: 11px; line-height: 1; margin-top: 2px; }
 
@@ -346,6 +353,7 @@
   .cal-swatch.uploaded { background: var(--success-light); border-color: var(--success); }
   .cal-swatch.missing { background: var(--danger-light); border-color: var(--danger); }
   .cal-swatch.future { background: var(--bg); border-color: var(--border); border-style: dashed; }
+  .cal-swatch.holiday { background: #fef9e7; border-color: #fde68a; }
   .cal-summary {
     display: flex; justify-content: space-around;
     padding: 10px; background: var(--bg); border-radius: 8px;
@@ -1043,7 +1051,7 @@ function render() {
     ? aggregateForSubChannel(dayData[subChannelGroup], filterCh)
     : aggregateChannels(viewChannels.map(c => dayData[c].detail).filter(Boolean));
 
-  // 월 누적 일수 계산
+  // 월 누적 일수 계산 (휴무 제외)
   const accuMonth = currentDate.slice(0, 7);
   const accuDates = new Set();
   for (const d of Object.keys(store)) {
@@ -1054,7 +1062,15 @@ function render() {
   const [accuYY, accuMM] = accuMonth.split('-').map(Number);
   const accuTotalDays = new Date(accuYY, accuMM, 0).getDate();
   const todayOfMonth = parseInt(currentDate.slice(8, 10));
-  const expectedDays = todayOfMonth;  // 오늘까지 있어야 함
+  // 휴무일 (자동 주말 + 커스텀) 카운트 - 오늘까지
+  const accuCustomHolidays = JSON.parse(localStorage.getItem('customHolidays') || '{}');
+  let accuHolidaysUpTo = 0;
+  for (let d = 1; d <= todayOfMonth; d++) {
+    const dow = new Date(accuYY, accuMM - 1, d).getDay();
+    const ds = `${accuMonth}-${String(d).padStart(2,'0')}`;
+    if (dow === 0 || dow === 6 || accuCustomHolidays[ds]) accuHolidaysUpTo++;
+  }
+  const expectedDays = Math.max(0, todayOfMonth - accuHolidaysUpTo);  // 영업일만
   const isAccuShort = accuDayCount < expectedDays;
 
   // 월 목표 설정 패널 (판매현황 기반 데이터에 한해, 사이트별 필터 시는 숨김)
@@ -1086,9 +1102,9 @@ function render() {
       <div class="progress-bar"><div class="progress-fill ${achClass(agg.daily_achievement, 1)}" style="width:${Math.min((agg.daily_achievement || 0) * 100, 100)}%"></div></div>
     </div>
     <div class="kpi-card">
-      <div class="label">월 누적 매출 <span style="color:${isAccuShort ? 'var(--warning)' : 'var(--success)'};font-size:11px;font-weight:500;margin-left:6px;">${accuDayCount}일치 누적 / ${todayOfMonth}일 중</span></div>
+      <div class="label">월 누적 매출 <span style="color:${isAccuShort ? 'var(--warning)' : 'var(--success)'};font-size:11px;font-weight:500;margin-left:6px;">${accuDayCount}일치 누적 / 영업일 ${expectedDays}일</span></div>
       <div class="value">${fmt.shortWon(agg.monthly_revenue)}</div>
-      <div class="sub">${agg.monthly_goal ? `목표 ${fmt.shortWon(agg.monthly_goal)} / 달성 ${fmt.pct(agg.month_achievement)}` : (isAccuShort ? `<span class="missing-link" data-show-calendar="1" style="color:var(--warning);">⚠ ${todayOfMonth - accuDayCount}일치 데이터 누락 - 클릭해서 누락 일자 확인</span>` : '월 누적 정상')}</div>
+      <div class="sub">${agg.monthly_goal ? `목표 ${fmt.shortWon(agg.monthly_goal)} / 달성 ${fmt.pct(agg.month_achievement)}` : (isAccuShort ? `<span class="missing-link" data-show-calendar="1" style="color:var(--warning);">⚠ ${expectedDays - accuDayCount}일치 데이터 누락 - 클릭해서 누락 일자 확인</span>` : `<span class="missing-link" data-show-calendar="1" style="color:var(--success);">✓ 영업일 모두 업로드 완료 - 달력 보기</span>`)}</div>
       <div class="progress-bar"><div class="progress-fill ${achClass(agg.month_achievement, agg.day_progress || 1)}" style="width:${Math.min((agg.month_achievement || 0) * 100, 100)}%"></div></div>
     </div>
     <div class="kpi-card">
@@ -1616,6 +1632,18 @@ function showMissingCalendar() {
     if (viewChannels.some(cg => store[d][cg])) uploaded.add(parseInt(d.slice(8, 10)));
   }
 
+  // 커스텀 휴무 (사용자가 클릭으로 추가)
+  const customHolidays = JSON.parse(localStorage.getItem('customHolidays') || '{}');
+  const isCustomHoliday = (d) => {
+    const ds = `${month}-${String(d).padStart(2,'0')}`;
+    return customHolidays[ds] === true;
+  };
+  // 자동 주말
+  const isWeekend = (d) => {
+    const dow = new Date(yy, mm - 1, d).getDay();
+    return dow === 0 || dow === 6;
+  };
+
   const today = new Date();
   const isCurrentMonth = today.getFullYear() === yy && (today.getMonth() + 1) === mm;
   const todayD = isCurrentMonth ? today.getDate() : totalDays;
@@ -1623,15 +1651,25 @@ function showMissingCalendar() {
 
   const cells = [];
   for (let i = 0; i < firstDay; i++) cells.push('<div class="cal-cell empty"></div>');
-  let uploadedCount = 0, missingCount = 0, futureCount = 0;
+  let uploadedCount = 0, missingCount = 0, holidayCount = 0, futureCount = 0;
   for (let d = 1; d <= totalDays; d++) {
     let cls = 'cal-cell';
     let mark = '';
-    if (uploaded.has(d)) { cls += ' uploaded'; mark = '✓'; uploadedCount++; }
-    else if (d <= todayD) { cls += ' missing'; mark = '⚠'; missingCount++; }
-    else { cls += ' future'; mark = ''; futureCount++; }
+    let dataAttr = `data-day="${d}"`;
+    const ds = `${month}-${String(d).padStart(2,'0')}`;
+    if (uploaded.has(d)) {
+      cls += ' uploaded'; mark = '✓'; uploadedCount++;
+    } else if (isWeekend(d) || isCustomHoliday(d)) {
+      cls += ' holiday';
+      if (isWeekend(d)) cls += ' weekend';
+      mark = '휴'; holidayCount++;
+    } else if (d <= todayD) {
+      cls += ' missing'; mark = '⚠'; missingCount++;
+    } else {
+      cls += ' future'; mark = ''; futureCount++;
+    }
     if (d === viewingD) cls += ' today';
-    cells.push(`<div class="${cls}"><span>${d}</span>${mark ? `<span class="mark">${mark}</span>` : ''}</div>`);
+    cells.push(`<div class="${cls}" ${dataAttr}><span>${d}</span>${mark ? `<span class="mark">${mark}</span>` : ''}</div>`);
   }
 
   const cgLabel = currentChannel === 'all' ? '전체' : currentChannel;
@@ -1646,6 +1684,7 @@ function showMissingCalendar() {
           <div class="cal-summary">
             <div><span class="num" style="color:var(--success);">${uploadedCount}</span><span>업로드됨</span></div>
             <div><span class="num" style="color:var(--danger);">${missingCount}</span><span>누락</span></div>
+            <div><span class="num" style="color:#ca8a04;">${holidayCount}</span><span>휴무</span></div>
             <div><span class="num" style="color:var(--text-sub);">${futureCount}</span><span>예정</span></div>
           </div>
           <div class="cal-grid">
@@ -1661,7 +1700,11 @@ function showMissingCalendar() {
           <div class="cal-legend">
             <div class="cal-legend-item"><div class="cal-swatch uploaded"></div>업로드됨</div>
             <div class="cal-legend-item"><div class="cal-swatch missing"></div>누락 (오늘 이전)</div>
+            <div class="cal-legend-item"><div class="cal-swatch holiday"></div>휴무 (주말/공휴일)</div>
             <div class="cal-legend-item"><div class="cal-swatch future"></div>예정 (미래)</div>
+          </div>
+          <div style="margin-top:12px;padding:10px;background:var(--primary-light);border-radius:8px;font-size:11px;color:var(--text);line-height:1.6;">
+            💡 <strong>팁</strong>: 주말은 자동으로 휴무 처리됩니다. <strong>평일 셀을 클릭</strong>하면 공휴일/명절 같은 날도 휴무로 표시할 수 있어요. 휴무로 표시된 날은 누락 카운트에서 제외됩니다.
           </div>
         </div>
       </div>
@@ -1673,6 +1716,24 @@ function showMissingCalendar() {
   const overlay = document.getElementById('modalOverlay');
   overlay.addEventListener('click', closeMissingCalendar);
   document.getElementById('modalClose').addEventListener('click', closeMissingCalendar);
+  // 평일 셀 클릭 → 커스텀 휴무 토글 (주말/미래/empty 제외)
+  document.querySelectorAll('.cal-cell[data-day]').forEach(el => {
+    el.addEventListener('click', e => {
+      e.stopPropagation();
+      const d = parseInt(el.dataset.day);
+      if (isWeekend(d)) return;  // 주말은 자동 처리, 토글 불가
+      // 미래는 무시
+      if (d > todayD) return;
+      const ds = `${month}-${String(d).padStart(2,'0')}`;
+      const holidays = JSON.parse(localStorage.getItem('customHolidays') || '{}');
+      if (holidays[ds]) delete holidays[ds];
+      else holidays[ds] = true;
+      localStorage.setItem('customHolidays', JSON.stringify(holidays));
+      // 모달 다시 그리고 KPI도 다시 계산되도록 render 호출
+      render();
+      showMissingCalendar();
+    });
+  });
 }
 function closeMissingCalendar() {
   const wrap = document.getElementById('calendarModal');
