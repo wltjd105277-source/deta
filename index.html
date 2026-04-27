@@ -526,19 +526,30 @@ function processSalesStatus(filename, wb) {
     .filter(c => c.amount !== 0 || c.qty !== 0 || GROUP_CHANNELS[group].includes(c.channel))
     .sort((a,b) => b.amount - a.amount);
 
-  // 상품별 (모델명 있는 것만, 배송비/할인 제외)
-  const prodMap = {};
+  // 상품별 (모델명 있는 것만, 배송비/할인 제외) — 전체 + 채널별
+  const prodMap = {};                    // 전체 상품
+  const prodByChannel = {};              // 채널별 상품 { channel: { name: {...} } }
   for (const t of txns) {
     if (!t.model) continue;
     if (String(t.item_code).startsWith('DEL-')) continue;
     if (/판매장려금/.test(String(t.group_name))) continue;
+    const ch = channelMap(t.shop);
     const k = String(t.model);
     if (!prodMap[k]) prodMap[k] = { name: k, qty: 0, revenue_amount: 0, cost_amount: 0 };
     prodMap[k].qty += t.qty;
     prodMap[k].revenue_amount += t.amount;
     prodMap[k].cost_amount += (t.cost_unit || 0) * (t.qty || 0);
+    if (!prodByChannel[ch]) prodByChannel[ch] = {};
+    if (!prodByChannel[ch][k]) prodByChannel[ch][k] = { name: k, qty: 0, revenue_amount: 0, cost_amount: 0 };
+    prodByChannel[ch][k].qty += t.qty;
+    prodByChannel[ch][k].revenue_amount += t.amount;
+    prodByChannel[ch][k].cost_amount += (t.cost_unit || 0) * (t.qty || 0);
   }
   const productsToday = Object.values(prodMap);
+  const productsByChannel = {};
+  for (const ch of Object.keys(prodByChannel)) {
+    productsByChannel[ch] = Object.values(prodByChannel[ch]);
+  }
 
   // 일일 합계
   const totalAmount = channelsToday.reduce((s,c) => s + c.amount, 0);
@@ -553,6 +564,7 @@ function processSalesStatus(filename, wb) {
     _source: '판매현황',
     _channels_today: channelsToday,
     _products_today: productsToday,
+    _products_by_channel: productsByChannel,
     _daily_total: { qty: totalQty, amount: totalAmount, profit: totalProfit, cost: totalCost },
     _files: [...(existing._files || []), { name: filename, type: '판매현황', ts: Date.now() }],
     // detail / daily_trend / products는 recomputeAggregates()에서 자동 생성
@@ -570,7 +582,11 @@ function recomputeAggregates() {
       const slot = store[date][cg];
       if (slot._source !== '판매현황') continue;
       if (!monthly[month]) monthly[month] = {};
-      if (!monthly[month][cg]) monthly[month][cg] = { channels: {}, products: {}, days: [] };
+      if (!monthly[month][cg]) monthly[month][cg] = {
+        channels: {}, products: {}, days: [],
+        productsByChannel: {},  // { channel: { name: {qty, revenue_amount, cost_amount} } }
+        daysByChannel: {},      // { channel: [{date, qty, revenue, cost, margin}] }
+      };
       const m = monthly[month][cg];
       m.days.push({
         date,
@@ -585,6 +601,16 @@ function recomputeAggregates() {
         m.channels[c.channel].qty += c.qty;
         m.channels[c.channel].amount += c.amount;
         m.channels[c.channel].profit += c.profit;
+        // 채널별 일별 추이
+        if (!m.daysByChannel[c.channel]) m.daysByChannel[c.channel] = [];
+        m.daysByChannel[c.channel].push({
+          date,
+          qty: c.qty,
+          revenue: c.amount,
+          sale: c.amount,
+          cost: c.amount - c.profit,
+          margin: c.profit,
+        });
       });
       (slot._products_today || []).forEach(p => {
         if (!m.products[p.name]) m.products[p.name] = { name: p.name, qty: 0, revenue_amount: 0, cost_amount: 0 };
@@ -592,6 +618,17 @@ function recomputeAggregates() {
         m.products[p.name].revenue_amount += p.revenue_amount;
         m.products[p.name].cost_amount += p.cost_amount;
       });
+      // 채널별 상품 누적
+      const pbc = slot._products_by_channel || {};
+      for (const ch of Object.keys(pbc)) {
+        if (!m.productsByChannel[ch]) m.productsByChannel[ch] = {};
+        for (const p of pbc[ch]) {
+          if (!m.productsByChannel[ch][p.name]) m.productsByChannel[ch][p.name] = { name: p.name, qty: 0, revenue_amount: 0, cost_amount: 0 };
+          m.productsByChannel[ch][p.name].qty += p.qty;
+          m.productsByChannel[ch][p.name].revenue_amount += p.revenue_amount;
+          m.productsByChannel[ch][p.name].cost_amount += p.cost_amount;
+        }
+      }
     }
   }
 
@@ -632,6 +669,15 @@ function recomputeAggregates() {
       };
       slot.daily_trend = [...m.days].sort((a,b) => a.date.localeCompare(b.date));
       slot.products = Object.values(m.products).sort((a,b) => b.revenue_amount - a.revenue_amount);
+      // 채널별 월간 집계 (사이트별 필터에 사용)
+      slot._monthly_products_by_channel = {};
+      for (const ch of Object.keys(m.productsByChannel)) {
+        slot._monthly_products_by_channel[ch] = Object.values(m.productsByChannel[ch]).sort((a,b) => b.revenue_amount - a.revenue_amount);
+      }
+      slot._monthly_days_by_channel = {};
+      for (const ch of Object.keys(m.daysByChannel)) {
+        slot._monthly_days_by_channel[ch] = [...m.daysByChannel[ch]].sort((a,b) => a.date.localeCompare(b.date));
+      }
     }
   }
 }
@@ -831,10 +877,34 @@ function render() {
   const fileNames = channels.flatMap(c => (dayData[c]._files || []).map(f => `<span class="file-tag">${f.name}</span>`)).join('');
   subtitle.innerHTML = fileNames || '데이터 없음';
 
-  // channel tabs
+  // 그룹 탭 (전체 / 쿠팡 / 샵N) + 사이트별 탭 (스마트스토어, 지마켓 등)
+  // 현재 일자에 존재하는 모든 서브채널 수집
+  const subChannelsSet = new Set();
+  for (const cg of channels) {
+    const slot = dayData[cg];
+    (slot._channels_today || slot.detail?.daily_channels || []).forEach(c => {
+      if (c.amount !== 0 || c.qty !== 0) subChannelsSet.add(c.channel);
+    });
+  }
+  const subChannels = Array.from(subChannelsSet);
+
+  // 사이트가 어느 그룹에 속하는지 매핑 (사이트별 탭 클릭 시 어느 cg에서 데이터 가져올지 판단)
+  const subToGroup = {};
+  for (const cg of channels) {
+    const groupChs = GROUP_CHANNELS[cg] || [];
+    groupChs.forEach(ch => subToGroup[ch] = cg);
+    // 데이터에 있지만 정의에 없는 채널도 매핑
+    const slot = dayData[cg];
+    (slot._channels_today || slot.detail?.daily_channels || []).forEach(c => {
+      if (!subToGroup[c.channel]) subToGroup[c.channel] = cg;
+    });
+  }
+
   tabs.innerHTML = `
     <div class="ch-tab ${currentChannel === 'all' ? 'active' : ''}" data-ch="all">전체</div>
     ${channels.map(c => `<div class="ch-tab ${currentChannel === c ? 'active' : ''}" data-ch="${c}">${c}</div>`).join('')}
+    ${subChannels.length > 0 ? '<div style="width:1px;height:20px;background:var(--border);margin:0 4px;"></div>' : ''}
+    ${subChannels.map(sc => `<div class="ch-tab sub ${currentChannel === sc ? 'active' : ''}" data-ch="${sc}" style="font-size:12px;padding:6px 12px;">${sc}</div>`).join('')}
   `;
   tabs.querySelectorAll('.ch-tab').forEach(el => {
     el.addEventListener('click', () => {
@@ -844,20 +914,33 @@ function render() {
   });
 
   // 채널 보기 결정
-  const viewChannels = currentChannel === 'all' ? channels : [currentChannel];
-  if (currentChannel !== 'all' && !channels.includes(currentChannel)) {
+  const isSubChannel = currentChannel !== 'all' && !channels.includes(currentChannel);
+  const subChannelGroup = isSubChannel ? subToGroup[currentChannel] : null;
+  const viewChannels = currentChannel === 'all' ? channels
+                     : isSubChannel ? [subChannelGroup]
+                     : [currentChannel];
+  if (isSubChannel && !subChannelGroup) {
+    content.innerHTML = `<div class="empty-state"><div class="big-icon">📭</div><h2>${currentChannel} 데이터가 없습니다</h2><p>이 일자에 ${currentChannel} 판매 기록이 없습니다.</p></div>`;
+    return;
+  }
+  if (!isSubChannel && currentChannel !== 'all' && !channels.includes(currentChannel)) {
     content.innerHTML = `<div class="empty-state"><div class="big-icon">📭</div><h2>${currentChannel} 데이터가 없습니다</h2><p>이 일자에는 ${currentChannel} 파일이 업로드되지 않았습니다.</p></div>`;
     return;
   }
 
-  // 합산 KPI
-  const agg = aggregateChannels(viewChannels.map(c => dayData[c].detail).filter(Boolean));
+  // 사이트별(서브채널) 필터
+  const filterCh = isSubChannel ? currentChannel : null;
 
-  // 월 목표 설정 패널 (판매현황 기반 데이터에 한해)
+  // 합산 KPI
+  const agg = filterCh
+    ? aggregateForSubChannel(dayData[subChannelGroup], filterCh)
+    : aggregateChannels(viewChannels.map(c => dayData[c].detail).filter(Boolean));
+
+  // 월 목표 설정 패널 (판매현황 기반 데이터에 한해, 사이트별 필터 시는 숨김)
   const monthKey = currentDate.slice(0, 7);
   const goalGroups = viewChannels.filter(cg => store[currentDate][cg]?._source === '판매현황');
   let html = '';
-  if (goalGroups.length > 0) {
+  if (goalGroups.length > 0 && !filterCh) {
     html += `<div class="panel" style="margin-bottom:16px;display:flex;flex-wrap:wrap;gap:14px;align-items:center;padding:14px 18px;">
       <span style="font-size:13px;font-weight:600;">🎯 ${monthKey} 월 목표</span>
       ${goalGroups.map(cg => {
@@ -919,8 +1002,10 @@ function render() {
     </div>
   `;
 
-  // 일별 추이 차트
-  const trendData = mergedTrend(viewChannels.map(c => dayData[c]).filter(Boolean));
+  // 일별 추이 차트 (사이트별 필터 적용)
+  const trendData = filterCh
+    ? (dayData[subChannelGroup]?._monthly_days_by_channel?.[filterCh] || [])
+    : mergedTrend(viewChannels.map(c => dayData[c]).filter(Boolean));
   if (trendData.length > 0) {
     html += `
       <div class="panel" style="margin-bottom:24px;">
@@ -955,14 +1040,16 @@ function render() {
           </tr>
         </thead>
         <tbody>
-          ${buildChannelTableRows(viewChannels.map(c => dayData[c].detail).filter(Boolean))}
+          ${buildChannelTableRows(viewChannels.map(c => dayData[c].detail).filter(Boolean), filterCh)}
         </tbody>
       </table>
     </div>
   `;
 
-  // 상품 순위
-  const allProducts = mergedProducts(viewChannels.map(c => dayData[c]).filter(Boolean));
+  // 상품 순위 (사이트별 필터 적용)
+  const allProducts = filterCh
+    ? (dayData[subChannelGroup]?._monthly_products_by_channel?.[filterCh] || [])
+    : mergedProducts(viewChannels.map(c => dayData[c]).filter(Boolean));
   if (allProducts.length > 0) {
     html += `
       <div class="panel">
@@ -983,8 +1070,8 @@ function render() {
   content.innerHTML = html;
 
   // 차트 그리기
-  drawChannelChart('daily', dayData, viewChannels);
-  drawPieChart(dayData, viewChannels);
+  drawChannelChart('daily', dayData, viewChannels, filterCh);
+  drawPieChart(dayData, viewChannels, filterCh);
   if (trendData.length > 0) drawTrendChart(trendData, 'revenue');
 
   // segmented control 이벤트
@@ -992,7 +1079,7 @@ function render() {
     el.addEventListener('click', () => {
       el.parentElement.querySelectorAll('.seg').forEach(s => s.classList.remove('active'));
       el.classList.add('active');
-      drawChannelChart(el.dataset.period, dayData, viewChannels);
+      drawChannelChart(el.dataset.period, dayData, viewChannels, filterCh);
     });
   });
   document.querySelectorAll('[data-target="trendChart"]').forEach(el => {
@@ -1009,6 +1096,25 @@ function render() {
       document.getElementById('prodTableWrap').innerHTML = buildProductTable(allProducts, el.dataset.sort);
     });
   });
+}
+
+// 사이트별(서브채널) 단일 채널에 대한 KPI 집계
+function aggregateForSubChannel(slot, ch) {
+  if (!slot || !slot.detail) return {};
+  const dayCh = (slot.detail.daily_channels || []).find(c => c.channel === ch) || { qty: 0, amount: 0, profit: 0 };
+  const monthCh = (slot.detail.monthly_channels || []).find(c => c.channel === ch) || { qty: 0, amount: 0, profit: 0 };
+  const day_progress = slot.detail.day_progress || 0;
+  return {
+    daily_revenue: dayCh.amount,
+    monthly_revenue: monthCh.amount,
+    daily_goal: null,           // 사이트별 별도 목표 없음
+    monthly_goal: null,
+    daily_achievement: null,
+    month_achievement: null,
+    day_progress,
+    month_forecast: day_progress > 0 ? monthCh.amount / day_progress : null,
+    vs_last_month: 0,
+  };
 }
 
 function aggregateChannels(details) {
@@ -1049,15 +1155,17 @@ function aheadOrBehind(ach, prog) {
   return `<span style="color:var(--danger)">▼${Math.abs(d).toFixed(1)}%p 뒤짐</span>`;
 }
 
-function buildChannelTableRows(details) {
+function buildChannelTableRows(details, filterCh) {
   // 모든 채널 통합 (channel 명으로 join, 일/월 매칭)
   const map = {};
   details.forEach(d => {
     (d.daily_channels || []).forEach(c => {
+      if (filterCh && c.channel !== filterCh) return;
       if (!map[c.channel]) map[c.channel] = { channel: c.channel, dq:0, da:0, dp:0, mq:0, ma:0, mp:0 };
       map[c.channel].dq += c.qty; map[c.channel].da += c.amount; map[c.channel].dp += c.profit;
     });
     (d.monthly_channels || []).forEach(c => {
+      if (filterCh && c.channel !== filterCh) return;
       if (!map[c.channel]) map[c.channel] = { channel: c.channel, dq:0, da:0, dp:0, mq:0, ma:0, mp:0 };
       map[c.channel].mq += c.qty; map[c.channel].ma += c.amount; map[c.channel].mp += c.profit;
     });
@@ -1148,16 +1256,17 @@ function buildProductTable(products, sortBy) {
 // ================================================================
 const PALETTE = ['#4f46e5','#ff5c5c','#03c75a','#f59e0b','#06b6d4','#ec4899','#8b5cf6','#10b981','#f97316'];
 
-function drawChannelChart(period, dayData, viewChannels) {
+function drawChannelChart(period, dayData, viewChannels, filterCh) {
   if (charts.channelChart) charts.channelChart.destroy();
   const ctx = document.getElementById('channelChart');
   if (!ctx) return;
-  // collect all channels across viewChannels' detail
+  // collect all channels across viewChannels' detail (filterCh가 있으면 그 채널만)
   const map = {};
   viewChannels.forEach(c => {
     const det = dayData[c]?.detail; if (!det) return;
     const arr = period === 'daily' ? det.daily_channels : det.monthly_channels;
     (arr || []).forEach(item => {
+      if (filterCh && item.channel !== filterCh) return;
       map[item.channel] = (map[item.channel] || 0) + (item.amount || 0);
     });
   });
@@ -1187,7 +1296,7 @@ function drawChannelChart(period, dayData, viewChannels) {
   });
 }
 
-function drawPieChart(dayData, viewChannels) {
+function drawPieChart(dayData, viewChannels, filterCh) {
   if (charts.pieChart) charts.pieChart.destroy();
   const ctx = document.getElementById('pieChart');
   if (!ctx) return;
@@ -1195,6 +1304,7 @@ function drawPieChart(dayData, viewChannels) {
   viewChannels.forEach(c => {
     const det = dayData[c]?.detail; if (!det) return;
     (det.daily_channels || []).forEach(item => {
+      if (filterCh && item.channel !== filterCh) return;
       if ((item.amount || 0) > 0) map[item.channel] = (map[item.channel] || 0) + item.amount;
     });
   });
