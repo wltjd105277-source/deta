@@ -229,6 +229,7 @@
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); }
   th { font-weight: 600; color: var(--text-sub); font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; background: #fafbff; box-shadow: inset 0 -1px 0 var(--border); }
+  th[data-sort-col]:hover { background: var(--primary-light); color: var(--primary); }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   tr:last-child td { border-bottom: none; }
   tr:hover td { background: #fafbff; }
@@ -1433,8 +1434,10 @@ function buildProductTable(products, sortBy, period, sortDir) {
   });
 
   const prefix = period === 'daily' ? '일' : '월';
-  const arrow = (col) => sortBy === col ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
-  const headStyle = (col) => `cursor:pointer;user-select:none;${sortBy === col ? 'color:var(--primary);' : ''}`;
+  const arrow = (col) => sortBy === col
+    ? `<span style="margin-left:4px;color:var(--primary);">${sortDir === 'asc' ? '▲' : '▼'}</span>`
+    : '<span style="margin-left:4px;color:var(--border2,#cbd5e1);font-size:9px;">↕</span>';
+  const headStyle = (col) => `cursor:pointer;user-select:none;transition:color 0.15s;${sortBy === col ? 'color:var(--primary);' : ''}`;
   return `<div style="max-height:600px;overflow-y:auto;border-radius:8px;">
     <table>
       <thead style="position:sticky;top:0;z-index:1;">
