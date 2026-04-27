@@ -482,25 +482,27 @@ function processSalesStatus(filename, wb) {
   else if (/샵N|엔에이치엔|스마트스토어/.test(headerText)) group = '샵N';
   else throw new Error(`${filename}: 채널그룹(쿠팡/샵N)을 판별할 수 없음`);
 
-  // 날짜 추출
-  const dm = headerText.match(/(\d{4})\/(\d{1,2})\/(\d{1,2})\s*~/);
-  if (!dm) throw new Error(`${filename}: 날짜를 추출할 수 없음`);
-  const dateStr = `${dm[1]}-${dm[2].padStart(2,'0')}-${dm[3].padStart(2,'0')}`;
-
-  // 트랜잭션 파싱
-  const txns = [];
+  // 트랜잭션을 자체 날짜별로 그룹화 (한 파일에 여러 날짜가 있어도 자동 분리)
+  const txnsByDate = {};
   for (let i = 2; i < rows.length; i++) {
     const r = rows[i];
     if (!r || !r[0]) continue;
     const f = String(r[0]);
     if (f.includes('계') || f.includes('합계') || f.includes('오전') || f.includes('오후')) continue;
+
+    // 첫 컬럼에서 날짜 추출: "2026/01/15-23" 또는 "2026-01-15"
+    const dm = f.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+    if (!dm) continue;
+    const dateStr = `${dm[1]}-${dm[2].padStart(2,'0')}-${dm[3].padStart(2,'0')}`;
+
     let model = r[4] || '';
     // 모델명이 비어있으면 품명 끝의 [모델코드] 패턴에서 자동 추출
     if (!model && r[3]) {
       const m = String(r[3]).match(/\[([A-Z][A-Za-z0-9\-_]+)\]\s*$/);
       if (m) model = m[1];
     }
-    txns.push({
+    if (!txnsByDate[dateStr]) txnsByDate[dateStr] = [];
+    txnsByDate[dateStr].push({
       item_code: r[1] || '',
       shop: r[2] || '',
       desc: r[3] || '',
@@ -514,68 +516,73 @@ function processSalesStatus(filename, wb) {
     });
   }
 
-  // 채널별 합계
-  const chMap = {};
-  GROUP_CHANNELS[group].forEach(c => chMap[c] = { channel: c, qty: 0, amount: 0, profit: 0 });
+  const dates = Object.keys(txnsByDate).sort();
+  if (!dates.length) throw new Error(`${filename}: 트랜잭션 날짜를 추출할 수 없음`);
 
-  for (const t of txns) {
-    const ch = channelMap(t.shop);
-    if (!chMap[ch]) chMap[ch] = { channel: ch, qty: 0, amount: 0, profit: 0 };
-    const isDelivery = String(t.item_code).startsWith('DEL-');
-    const cost = (t.cost_unit || 0) * (t.qty || 0);
-    chMap[ch].amount += t.amount;
-    chMap[ch].profit += (t.amount - cost);
-    if (!isDelivery) chMap[ch].qty += t.qty;
+  // 각 날짜별로 슬롯 저장
+  for (const dateStr of dates) {
+    const txns = txnsByDate[dateStr];
+
+    // 채널별 합계
+    const chMap = {};
+    GROUP_CHANNELS[group].forEach(c => chMap[c] = { channel: c, qty: 0, amount: 0, profit: 0 });
+    for (const t of txns) {
+      const ch = channelMap(t.shop);
+      if (!chMap[ch]) chMap[ch] = { channel: ch, qty: 0, amount: 0, profit: 0 };
+      const isDelivery = String(t.item_code).startsWith('DEL-');
+      const cost = (t.cost_unit || 0) * (t.qty || 0);
+      chMap[ch].amount += t.amount;
+      chMap[ch].profit += (t.amount - cost);
+      if (!isDelivery) chMap[ch].qty += t.qty;
+    }
+    const channelsToday = Object.values(chMap)
+      .filter(c => c.amount !== 0 || c.qty !== 0 || GROUP_CHANNELS[group].includes(c.channel))
+      .sort((a,b) => b.amount - a.amount);
+
+    // 상품별 (전체 + 채널별)
+    const prodMap = {};
+    const prodByChannel = {};
+    for (const t of txns) {
+      if (!t.model) continue;
+      if (String(t.item_code).startsWith('DEL-')) continue;
+      if (/판매장려금/.test(String(t.group_name))) continue;
+      const ch = channelMap(t.shop);
+      const k = String(t.model);
+      if (!prodMap[k]) prodMap[k] = { name: k, qty: 0, revenue_amount: 0, cost_amount: 0 };
+      prodMap[k].qty += t.qty;
+      prodMap[k].revenue_amount += t.amount;
+      prodMap[k].cost_amount += (t.cost_unit || 0) * (t.qty || 0);
+      if (!prodByChannel[ch]) prodByChannel[ch] = {};
+      if (!prodByChannel[ch][k]) prodByChannel[ch][k] = { name: k, qty: 0, revenue_amount: 0, cost_amount: 0 };
+      prodByChannel[ch][k].qty += t.qty;
+      prodByChannel[ch][k].revenue_amount += t.amount;
+      prodByChannel[ch][k].cost_amount += (t.cost_unit || 0) * (t.qty || 0);
+    }
+    const productsToday = Object.values(prodMap);
+    const productsByChannel = {};
+    for (const ch of Object.keys(prodByChannel)) {
+      productsByChannel[ch] = Object.values(prodByChannel[ch]);
+    }
+
+    // 일일 합계
+    const totalAmount = channelsToday.reduce((s,c) => s + c.amount, 0);
+    const totalQty = channelsToday.reduce((s,c) => s + c.qty, 0);
+    const totalProfit = channelsToday.reduce((s,c) => s + c.profit, 0);
+    const totalCost = totalAmount - totalProfit;
+
+    if (!store[dateStr]) store[dateStr] = {};
+    const existing = store[dateStr][group] || {};
+    store[dateStr][group] = {
+      upload_date: dateStr, channel: group,
+      _source: '판매현황',
+      _channels_today: channelsToday,
+      _products_today: productsToday,
+      _products_by_channel: productsByChannel,
+      _daily_total: { qty: totalQty, amount: totalAmount, profit: totalProfit, cost: totalCost },
+      _files: [...(existing._files || []), { name: filename, type: '판매현황', ts: Date.now() }],
+      detail: null, daily_trend: [], products: [],
+    };
   }
-
-  const channelsToday = Object.values(chMap)
-    .filter(c => c.amount !== 0 || c.qty !== 0 || GROUP_CHANNELS[group].includes(c.channel))
-    .sort((a,b) => b.amount - a.amount);
-
-  // 상품별 (모델명 있는 것만, 배송비/할인 제외) — 전체 + 채널별
-  const prodMap = {};                    // 전체 상품
-  const prodByChannel = {};              // 채널별 상품 { channel: { name: {...} } }
-  for (const t of txns) {
-    if (!t.model) continue;
-    if (String(t.item_code).startsWith('DEL-')) continue;
-    if (/판매장려금/.test(String(t.group_name))) continue;
-    const ch = channelMap(t.shop);
-    const k = String(t.model);
-    if (!prodMap[k]) prodMap[k] = { name: k, qty: 0, revenue_amount: 0, cost_amount: 0 };
-    prodMap[k].qty += t.qty;
-    prodMap[k].revenue_amount += t.amount;
-    prodMap[k].cost_amount += (t.cost_unit || 0) * (t.qty || 0);
-    if (!prodByChannel[ch]) prodByChannel[ch] = {};
-    if (!prodByChannel[ch][k]) prodByChannel[ch][k] = { name: k, qty: 0, revenue_amount: 0, cost_amount: 0 };
-    prodByChannel[ch][k].qty += t.qty;
-    prodByChannel[ch][k].revenue_amount += t.amount;
-    prodByChannel[ch][k].cost_amount += (t.cost_unit || 0) * (t.qty || 0);
-  }
-  const productsToday = Object.values(prodMap);
-  const productsByChannel = {};
-  for (const ch of Object.keys(prodByChannel)) {
-    productsByChannel[ch] = Object.values(prodByChannel[ch]);
-  }
-
-  // 일일 합계
-  const totalAmount = channelsToday.reduce((s,c) => s + c.amount, 0);
-  const totalQty = channelsToday.reduce((s,c) => s + c.qty, 0);
-  const totalProfit = channelsToday.reduce((s,c) => s + c.profit, 0);
-  const totalCost = totalAmount - totalProfit;
-
-  if (!store[dateStr]) store[dateStr] = {};
-  const existing = store[dateStr][group] || {};
-  store[dateStr][group] = {
-    upload_date: dateStr, channel: group,
-    _source: '판매현황',
-    _channels_today: channelsToday,
-    _products_today: productsToday,
-    _products_by_channel: productsByChannel,
-    _daily_total: { qty: totalQty, amount: totalAmount, profit: totalProfit, cost: totalCost },
-    _files: [...(existing._files || []), { name: filename, type: '판매현황', ts: Date.now() }],
-    // detail / daily_trend / products는 recomputeAggregates()에서 자동 생성
-    detail: null, daily_trend: [], products: [],
-  };
 }
 
 // 판매현황 기반 데이터를 월간 집계해서 detail/daily_trend/products 를 자동 채움
