@@ -1188,7 +1188,8 @@ function render() {
     : mergedProducts(viewChannels.map(c => dayData[c]).filter(Boolean));
   // 기본은 월별
   let prodPeriod = 'monthly';
-  let prodSort = 'revenue';
+  let prodSort = 'revenue_amount';  // 기본 정렬: 매출 내림차순
+  let prodSortDir = 'desc';
   const getProds = () => prodPeriod === 'daily' ? productsDaily : productsMonthly;
   html += `
     <div class="panel">
@@ -1200,13 +1201,13 @@ function render() {
             <span class="seg" data-period="monthly" data-target="prodPeriod" style="border:none;${prodPeriod==='monthly'?'background:var(--primary);color:white;':''}">월별</span>
           </div>
           <div style="display:flex;gap:0;background:var(--bg);border-radius:6px;padding:2px;">
-            <span class="seg" data-sort="revenue" data-target="prodTable" style="border:none;${prodSort==='revenue'?'background:var(--primary);color:white;':''}">매출순</span>
+            <span class="seg" data-sort="revenue_amount" data-target="prodTable" style="border:none;${prodSort==='revenue_amount'?'background:var(--primary);color:white;':''}">매출순</span>
             <span class="seg" data-sort="qty" data-target="prodTable" style="border:none;${prodSort==='qty'?'background:var(--primary);color:white;':''}">수량순</span>
           </div>
         </div>
       </div>
       <div id="prodTableWrap">
-        ${buildProductTable(getProds(), prodSort, prodPeriod)}
+        ${buildProductTable(getProds(), prodSort, prodPeriod, prodSortDir)}
       </div>
     </div>
   `;
@@ -1249,21 +1250,43 @@ function render() {
       if (titleEl) {
         titleEl.innerHTML = `🏆 상품별 ${prodPeriod === 'daily' ? '일' : '월 누적'} 판매 ${filterCh ? `<span style="color:var(--primary);font-size:13px;">(${filterCh})</span> ` : ''}<span style="color:var(--text-sub);font-size:12px;font-weight:500;">총 ${prods.length}개</span>`;
       }
-      document.getElementById('prodTableWrap').innerHTML = buildProductTable(prods, prodSort, prodPeriod);
+      document.getElementById('prodTableWrap').innerHTML = buildProductTable(prods, prodSort, prodPeriod, prodSortDir);
+      bindProdHeadSort();
     });
   });
-  // 매출순/수량순 토글
+  // 매출순/수량순 quick toggle
   document.querySelectorAll('[data-target="prodTable"]').forEach(el => {
     el.addEventListener('click', () => {
       prodSort = el.dataset.sort;
+      prodSortDir = 'desc';  // quick toggle은 항상 내림차순
       el.parentElement.querySelectorAll('.seg').forEach(s => {
         s.style.background = ''; s.style.color = '';
       });
       el.style.background = 'var(--primary)';
       el.style.color = 'white';
-      document.getElementById('prodTableWrap').innerHTML = buildProductTable(getProds(), prodSort, prodPeriod);
+      document.getElementById('prodTableWrap').innerHTML = buildProductTable(getProds(), prodSort, prodPeriod, prodSortDir);
+      bindProdHeadSort();
     });
   });
+  // 컬럼 헤더 클릭 정렬 (매번 다시 바인딩 - 테이블이 다시 그려지므로)
+  function bindProdHeadSort() {
+    document.querySelectorAll('#prodTableWrap th[data-sort-col]').forEach(th => {
+      th.addEventListener('click', () => {
+        const col = th.dataset.sortCol;
+        if (prodSort === col) {
+          // 같은 컬럼 다시 클릭 → 방향 반전
+          prodSortDir = (prodSortDir === 'desc') ? 'asc' : 'desc';
+        } else {
+          prodSort = col;
+          // 텍스트는 기본 오름, 숫자는 기본 내림
+          prodSortDir = (col === 'name') ? 'asc' : 'desc';
+        }
+        document.getElementById('prodTableWrap').innerHTML = buildProductTable(getProds(), prodSort, prodPeriod, prodSortDir);
+        bindProdHeadSort();
+      });
+    });
+  }
+  bindProdHeadSort();
 }
 
 // 사이트별(서브채널) 단일 채널에 대한 KPI 집계
@@ -1387,23 +1410,41 @@ function mergedProducts(slots) {
   return Object.values(map);
 }
 
-function buildProductTable(products, sortBy, period) {
-  const sorted = [...products].sort((a,b) => (b[sortBy === 'qty' ? 'qty' : 'revenue_amount']) - (a[sortBy === 'qty' ? 'qty' : 'revenue_amount']));
+function buildProductTable(products, sortBy, period, sortDir) {
   const totalRev = products.reduce((s,p) => s + (p.revenue_amount || 0), 0);
-  if (!sorted.length) {
+  if (!products.length) {
     return '<div style="padding:40px;text-align:center;color:var(--text-sub);font-size:13px;">판매된 상품이 없습니다</div>';
   }
+  // 정렬 키별 추출 함수
+  const keyFn = {
+    name: p => p.name || '',
+    qty: p => p.qty || 0,
+    revenue_amount: p => p.revenue_amount || 0,
+    share: p => totalRev > 0 ? (p.revenue_amount || 0) / totalRev : 0,
+    margin: p => (p.revenue_amount || 0) - (p.cost_amount || 0),
+  };
+  const fn = keyFn[sortBy] || keyFn.revenue_amount;
+  const dir = (sortDir === 'asc') ? 1 : -1;
+  const isText = sortBy === 'name';
+  const sorted = [...products].sort((a, b) => {
+    const va = fn(a), vb = fn(b);
+    if (isText) return (String(va) < String(vb) ? -1 : (String(va) > String(vb) ? 1 : 0)) * dir;
+    return (va - vb) * dir;
+  });
+
   const prefix = period === 'daily' ? '일' : '월';
+  const arrow = (col) => sortBy === col ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
+  const headStyle = (col) => `cursor:pointer;user-select:none;${sortBy === col ? 'color:var(--primary);' : ''}`;
   return `<div style="max-height:600px;overflow-y:auto;border-radius:8px;">
     <table>
       <thead style="position:sticky;top:0;z-index:1;">
         <tr>
           <th style="width:40px;">#</th>
-          <th>상품명</th>
-          <th class="num">${prefix} 수량</th>
-          <th class="num">${prefix} 매출 (납품가)</th>
-          <th class="num">매출 비중</th>
-          <th class="num">예상 마진</th>
+          <th data-sort-col="name" style="${headStyle('name')}">상품명${arrow('name')}</th>
+          <th class="num" data-sort-col="qty" style="${headStyle('qty')}">${prefix} 수량${arrow('qty')}</th>
+          <th class="num" data-sort-col="revenue_amount" style="${headStyle('revenue_amount')}">${prefix} 매출 (납품가)${arrow('revenue_amount')}</th>
+          <th class="num" data-sort-col="share" style="${headStyle('share')}">매출 비중${arrow('share')}</th>
+          <th class="num" data-sort-col="margin" style="${headStyle('margin')}">예상 마진${arrow('margin')}</th>
         </tr>
       </thead>
       <tbody>
