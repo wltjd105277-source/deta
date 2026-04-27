@@ -228,7 +228,7 @@
 
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); }
-  th { font-weight: 600; color: var(--text-sub); font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; background: #fafbff; }
+  th { font-weight: 600; color: var(--text-sub); font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; background: #fafbff; box-shadow: inset 0 -1px 0 var(--border); }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   tr:last-child td { border-bottom: none; }
   tr:hover td { background: #fafbff; }
@@ -494,11 +494,17 @@ function processSalesStatus(filename, wb) {
     if (!r || !r[0]) continue;
     const f = String(r[0]);
     if (f.includes('계') || f.includes('합계') || f.includes('오전') || f.includes('오후')) continue;
+    let model = r[4] || '';
+    // 모델명이 비어있으면 품명 끝의 [모델코드] 패턴에서 자동 추출
+    if (!model && r[3]) {
+      const m = String(r[3]).match(/\[([A-Z][A-Za-z0-9\-_]+)\]\s*$/);
+      if (m) model = m[1];
+    }
     txns.push({
       item_code: r[1] || '',
       shop: r[2] || '',
       desc: r[3] || '',
-      model: r[4] || '',
+      model: model,
       qty: r[5] || 0,
       amount: r[7] || 0,
       vat: r[8] || 0,
@@ -1046,26 +1052,24 @@ function render() {
     </div>
   `;
 
-  // 상품 순위 (사이트별 필터 적용)
+  // 상품 순위 (사이트별 필터 적용) - 전체 상품 표시
   const allProducts = filterCh
     ? (dayData[subChannelGroup]?._monthly_products_by_channel?.[filterCh] || [])
     : mergedProducts(viewChannels.map(c => dayData[c]).filter(Boolean));
-  if (allProducts.length > 0) {
-    html += `
-      <div class="panel">
-        <div class="panel-title">
-          <span>🏆 상품별 월 누적 판매 TOP 20</span>
-          <div class="actions">
-            <span class="seg active" data-sort="revenue" data-target="prodTable">매출순</span>
-            <span class="seg" data-sort="qty" data-target="prodTable">수량순</span>
-          </div>
-        </div>
-        <div id="prodTableWrap">
-          ${buildProductTable(allProducts, 'revenue')}
+  html += `
+    <div class="panel">
+      <div class="panel-title">
+        <span>🏆 상품별 월 누적 판매 ${filterCh ? `<span style="color:var(--primary);font-size:13px;">(${filterCh})</span> ` : ''}<span style="color:var(--text-sub);font-size:12px;font-weight:500;">총 ${allProducts.length}개</span></span>
+        <div class="actions">
+          <span class="seg active" data-sort="revenue" data-target="prodTable">매출순</span>
+          <span class="seg" data-sort="qty" data-target="prodTable">수량순</span>
         </div>
       </div>
-    `;
-  }
+      <div id="prodTableWrap">
+        ${buildProductTable(allProducts, 'revenue')}
+      </div>
+    </div>
+  `;
 
   content.innerHTML = html;
 
@@ -1221,34 +1225,38 @@ function mergedProducts(slots) {
 
 function buildProductTable(products, sortBy) {
   const sorted = [...products].sort((a,b) => (b[sortBy === 'qty' ? 'qty' : 'revenue_amount']) - (a[sortBy === 'qty' ? 'qty' : 'revenue_amount']));
-  const top = sorted.slice(0, 20);
   const totalRev = products.reduce((s,p) => s + (p.revenue_amount || 0), 0);
-  return `<table>
-    <thead>
-      <tr>
-        <th style="width:40px;">#</th>
-        <th>상품명</th>
-        <th class="num">월 수량</th>
-        <th class="num">월 매출 (납품가)</th>
-        <th class="num">매출 비중</th>
-        <th class="num">예상 마진</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${top.map((p, i) => {
-        const share = totalRev > 0 ? (p.revenue_amount / totalRev * 100).toFixed(1) + '%' : '-';
-        const margin = (p.revenue_amount || 0) - (p.cost_amount || 0);
-        return `<tr>
-          <td>${i+1}</td>
-          <td>${p.name}</td>
-          <td class="num">${fmt.num(p.qty)}</td>
-          <td class="num">${fmt.won(p.revenue_amount)}</td>
-          <td class="num">${share}</td>
-          <td class="num" style="color:${margin >= 0 ? 'var(--success)' : 'var(--danger)'}">${fmt.won(margin)}</td>
-        </tr>`;
-      }).join('')}
-    </tbody>
-  </table>`;
+  if (!sorted.length) {
+    return '<div style="padding:40px;text-align:center;color:var(--text-sub);font-size:13px;">판매된 상품이 없습니다</div>';
+  }
+  return `<div style="max-height:600px;overflow-y:auto;border-radius:8px;">
+    <table>
+      <thead style="position:sticky;top:0;z-index:1;">
+        <tr>
+          <th style="width:40px;">#</th>
+          <th>상품명</th>
+          <th class="num">월 수량</th>
+          <th class="num">월 매출 (납품가)</th>
+          <th class="num">매출 비중</th>
+          <th class="num">예상 마진</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${sorted.map((p, i) => {
+          const share = totalRev > 0 ? (p.revenue_amount / totalRev * 100).toFixed(1) + '%' : '-';
+          const margin = (p.revenue_amount || 0) - (p.cost_amount || 0);
+          return `<tr>
+            <td>${i+1}</td>
+            <td>${p.name}</td>
+            <td class="num">${fmt.num(p.qty)}</td>
+            <td class="num">${fmt.won(p.revenue_amount)}</td>
+            <td class="num">${share}</td>
+            <td class="num" style="color:${margin >= 0 ? 'var(--success)' : 'var(--danger)'}">${fmt.won(margin)}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  </div>`;
 }
 
 // ================================================================
