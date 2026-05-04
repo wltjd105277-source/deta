@@ -1181,12 +1181,21 @@ function render() {
     </div>`;
 
     // 채널별 월 광고비 입력 패널
-    // 현재 일자에 매출이 있었던 모든 서브채널 수집
+    // 그 달에 한 번이라도 매출이 있었던 모든 서브채널 수집
+    // (광고는 매출 0원인 날에도 나가므로 monthly 기준 사용)
     const adChannels = new Set();
     for (const cg of goalGroups) {
-      (store[currentDate][cg]._channels_today || []).forEach(c => {
+      const slot = store[currentDate][cg];
+      // 월간 누적 채널 우선
+      (slot.detail?.monthly_channels || []).forEach(c => {
         if (c.amount !== 0 || c.qty !== 0) adChannels.add(c.channel);
       });
+      // 혹시 monthly_channels가 비어있으면 일일 채널 폴백
+      if (adChannels.size === 0) {
+        (slot._channels_today || []).forEach(c => {
+          if (c.amount !== 0 || c.qty !== 0) adChannels.add(c.channel);
+        });
+      }
     }
     const adChannelList = Array.from(adChannels);
     if (adChannelList.length > 0) {
