@@ -718,6 +718,65 @@ function processSalesStatus(filename, wb) {
   }
 }
 
+// 전월(특정 월의 직전 월) 데이터 집계
+function getPrevMonthAgg(currentMonth, viewChannels) {
+  const [yy, mm] = currentMonth.split('-').map(Number);
+  const prevYY = mm === 1 ? yy - 1 : yy;
+  const prevMM = mm === 1 ? 12 : mm - 1;
+  const prevMonth = `${prevYY}-${String(prevMM).padStart(2,'0')}`;
+
+  const channels = {};
+  const products = {};
+  const productsByChannel = {};
+  let totalRevenue = 0, totalProfit = 0, totalQty = 0;
+
+  for (const d of Object.keys(store)) {
+    if (!d.startsWith(prevMonth)) continue;
+    for (const cg of viewChannels) {
+      const slot = store[d][cg];
+      if (!slot || slot._source !== '판매현황') continue;
+      (slot._channels_today || []).forEach(c => {
+        if (!channels[c.channel]) channels[c.channel] = { amount: 0, qty: 0, profit: 0 };
+        channels[c.channel].amount += c.amount;
+        channels[c.channel].qty += c.qty;
+        channels[c.channel].profit += c.profit;
+        totalRevenue += c.amount;
+        totalProfit += c.profit;
+        totalQty += c.qty;
+      });
+      (slot._products_today || []).forEach(p => {
+        if (!products[p.name]) products[p.name] = { qty:0, revenue_amount:0, cost_amount:0 };
+        products[p.name].qty += p.qty;
+        products[p.name].revenue_amount += p.revenue_amount;
+        products[p.name].cost_amount += p.cost_amount;
+      });
+      const pbc = slot._products_by_channel || {};
+      for (const ch of Object.keys(pbc)) {
+        if (!productsByChannel[ch]) productsByChannel[ch] = {};
+        for (const p of pbc[ch]) {
+          if (!productsByChannel[ch][p.name]) productsByChannel[ch][p.name] = { qty:0, revenue_amount:0, cost_amount:0 };
+          productsByChannel[ch][p.name].qty += p.qty;
+          productsByChannel[ch][p.name].revenue_amount += p.revenue_amount;
+          productsByChannel[ch][p.name].cost_amount += p.cost_amount;
+        }
+      }
+    }
+  }
+  return { prevMonth, channels, products, productsByChannel, totalRevenue, totalProfit, totalQty };
+}
+
+function changeBadge(curr, prev) {
+  if (prev == null || prev === 0) {
+    if (curr > 0) return '<span style="color:var(--success);font-size:11px;">신규</span>';
+    return '<span style="color:var(--text-sub);font-size:11px;">-</span>';
+  }
+  const pct = (curr - prev) / Math.abs(prev) * 100;
+  if (Math.abs(pct) < 0.1) return '<span style="color:var(--text-sub);font-size:11px;">─</span>';
+  const arrow = pct > 0 ? '▲' : '▼';
+  const color = pct > 0 ? 'var(--success)' : 'var(--danger)';
+  return `<span style="color:${color};font-size:11px;font-weight:600;">${arrow} ${Math.abs(pct).toFixed(1)}%</span>`;
+}
+
 // 판매현황 기반 데이터를 월간 집계해서 detail/daily_trend/products 를 자동 채움
 function recomputeAggregates() {
   // 월별 / 채널그룹별로 집계
@@ -1139,6 +1198,9 @@ function render() {
     ? aggregateForSubChannel(dayData[subChannelGroup], filterCh)
     : aggregateChannels(viewChannels.map(c => dayData[c].detail).filter(Boolean));
 
+  // 전월 데이터 (전월대비 증감률용)
+  const prevAgg = getPrevMonthAgg(currentDate.slice(0, 7), viewChannels);
+
   // 월 누적 일수 계산 (휴무 제외)
   const accuMonth = currentDate.slice(0, 7);
   const accuDates = new Set();
@@ -1242,7 +1304,15 @@ function render() {
     <div class="kpi-card">
       <div class="label">월마감 예상</div>
       <div class="value">${fmt.shortWon(agg.month_forecast)}</div>
-      <div class="sub ${agg.vs_last_month >= 0 ? 'up' : 'down'}">전월 대비 ${agg.vs_last_month >= 0 ? '+' : ''}${fmt.shortWon(agg.vs_last_month)}</div>
+      <div class="sub">${(() => {
+        const prevTotal = filterCh ? (prevAgg.channels[filterCh]?.amount || 0) : prevAgg.totalRevenue;
+        const fc = agg.month_forecast || 0;
+        if (prevTotal === 0) return fc > 0 ? '<span style="color:var(--success);">신규 (전월 데이터 없음)</span>' : '<span style="color:var(--text-sub);">전월 데이터 없음</span>';
+        const diff = fc - prevTotal;
+        const pct = diff / Math.abs(prevTotal) * 100;
+        const color = diff >= 0 ? 'var(--success)' : 'var(--danger)';
+        return `전월 ${fmt.shortWon(prevTotal)} → <span style="color:${color};font-weight:600;">${diff >= 0 ? '+' : ''}${fmt.shortWon(diff)} (${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%)</span>`;
+      })()}</div>
     </div>
   </div>`;
 
@@ -1308,10 +1378,11 @@ function render() {
               <th class="num" style="background:var(--primary-light);">월 광고비</th>
               <th class="num" style="background:var(--primary-light);">순이익</th>
               <th class="num" style="background:var(--primary-light);">순마진률</th>
+              <th class="num">전월 대비</th>
             </tr>
           </thead>
           <tbody>
-            ${buildChannelTableRows(viewChannels.map(c => dayData[c].detail).filter(Boolean), filterCh, monthKey)}
+            ${buildChannelTableRows(viewChannels.map(c => dayData[c].detail).filter(Boolean), filterCh, monthKey, prevAgg)}
           </tbody>
         </table>
       </div>
@@ -1503,7 +1574,7 @@ function aheadOrBehind(ach, prog) {
   return `<span style="color:var(--danger)">▼${Math.abs(d).toFixed(1)}%p 뒤짐</span>`;
 }
 
-function buildChannelTableRows(details, filterCh, monthKey) {
+function buildChannelTableRows(details, filterCh, monthKey, prevAgg) {
   // 모든 채널 통합 (channel 명으로 join, 일/월 매칭)
   const map = {};
   details.forEach(d => {
