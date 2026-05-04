@@ -2088,7 +2088,7 @@ function buildReportSheet(slot, cg, date) {
   const dayOfMonth = parseInt(date.slice(8, 10));
   const prevAgg = getPrevMonthAgg(month, [cg]);
 
-  // 상품 통합 리스트 (당월 + 전월 + 일일 모두 union, 당월 매출 desc 정렬)
+  // 상품 통합 리스트 (당월 매출 desc)
   const productMonthlyMap = {};
   (slot.products || []).forEach(p => productMonthlyMap[p.name] = p.revenue_amount || 0);
   const productNames = new Set();
@@ -2102,35 +2102,28 @@ function buildReportSheet(slot, cg, date) {
     return a.localeCompare(b);
   });
 
-  // 보고서 시트 데이터 - 좌측 요약 + 우측 상품 표
   const aoa = [];
   const blank = (cols) => Array(cols).fill(null);
-  // 보고서는 마지막 상품 행까지 길이 필요 → max(32, 4 + sortedProds.length)
-  const totalRows = Math.max(32, 4 + sortedProds.length);
+  const totalRows = Math.max(32, 4 + sortedProds.length + 2);
   for (let i = 0; i < totalRows; i++) aoa.push(blank(24));
 
-  // 좌측 요약
+  // 좌측 요약 정적 텍스트
   aoa[0][19] = '[ 수량 : ea / 단위 : 원(VAT포함) ]';
   aoa[1][1] = '일일 매출 보고서';
   aoa[4][1] = date;
-  aoa[7][1] = `라인업시스템㈜-랜스타`;
+  aoa[7][1] = '라인업시스템㈜-랜스타';
   aoa[10][1] = ' 당월 목표 매출 A'; aoa[10][2] = d.monthly_goal || 0;
-  aoa[12][1] = ' 일 목표 매출 B\n( A / F )'; aoa[12][2] = d.daily_goal || 0;
-  aoa[14][1] = ' 월 납품가 매출 C'; aoa[14][2] = d.monthly_revenue || 0;
-  aoa[16][1] = ' 일 납품가 매출 D'; aoa[16][2] = d.daily_revenue || 0;
+  aoa[12][1] = ' 일 목표 매출 B\n( A / F )';
+  aoa[14][1] = ' 월 납품가 매출 C';
+  aoa[16][1] = ' 일 납품가 매출 D';
   aoa[18][1] = ' 월 달성율\n[ 기준 / 달성 ]';
-  aoa[18][2] = d.day_progress || 0;
-  aoa[18][4] = d.month_achievement || 0;
-  aoa[20][1] = ' 일 달성율\n( D / B)'; aoa[20][2] = d.daily_achievement || 0;
+  aoa[20][1] = ' 일 달성율\n( D / B)';
   aoa[23][1] = '금일 E'; aoa[23][2] = dayOfMonth;
   aoa[24][1] = '총일수 F'; aoa[24][2] = totalDays;
-  aoa[25][1] = '금일 진행률 G\n( E / F )'; aoa[25][2] = d.day_progress || 0;
-  aoa[28][1] = '월마감 예상'; aoa[28][2] = d.month_forecast || 0;
-  // 전월 대비
-  const prevTotal = prevAgg.totalRevenue || 0;
-  const fc = d.month_forecast || 0;
-  aoa[29][1] = '전월 vs 당월'; aoa[29][2] = fc - prevTotal;
-  aoa[30][1] = '증감률'; aoa[30][2] = prevTotal > 0 ? (fc - prevTotal) / prevTotal : '';
+  aoa[25][1] = '금일 진행률 G\n( E / F )';
+  aoa[28][1] = '월마감 예상';
+  aoa[29][1] = '전월 vs 당월';
+  aoa[30][1] = '증감률';
 
   // 우측 상품 표 헤더
   aoa[1][8] = '품목';
@@ -2149,27 +2142,88 @@ function buildReportSheet(slot, cg, date) {
   aoa[2][21] = '예상금액';
   aoa[2][22] = '차액';
 
-  // 상품 행: I=8 모델, L=11 전월수량, M=12 전월매출, O=14 당월수량, P=15 당월매출, R=17 일일수량, S=18 일일매출, V=21 예상, W=22 차액, X=23 증감률
+  // 상품 행: 모델명 + 전월 (하드코딩) — 나머지는 수식으로 후처리
   sortedProds.forEach((name, i) => {
     const row = 3 + i;
-    const monthly = (slot.products || []).find(p => p.name === name) || { qty: 0, revenue_amount: 0 };
     const prev = prevAgg.products[name] || { qty: 0, revenue_amount: 0 };
-    const today = (slot._products_today || []).find(p => p.name === name) || { qty: 0, revenue_amount: 0 };
-    aoa[row][8] = name;
-    aoa[row][11] = prev.qty;
-    aoa[row][12] = prev.revenue_amount;
-    aoa[row][14] = monthly.qty;
-    aoa[row][15] = monthly.revenue_amount;
-    aoa[row][17] = today.qty;
-    aoa[row][18] = today.revenue_amount;
-    // 당월마감 예상 = 당월 매출 / day_progress
-    const forecast = d.day_progress > 0 ? monthly.revenue_amount / d.day_progress : 0;
-    aoa[row][21] = forecast;
-    aoa[row][22] = forecast - prev.revenue_amount;
-    aoa[row][23] = prev.revenue_amount > 0 ? (forecast - prev.revenue_amount) / prev.revenue_amount : '';
+    aoa[row][8] = name;          // I
+    aoa[row][11] = prev.qty;     // L (전월 수량 - 하드코딩)
+    aoa[row][12] = prev.revenue_amount;  // M (전월 매출 - 하드코딩)
   });
 
+  // 합계 행 위치 (마지막 상품 다음 행)
+  const lastProdRow = 4 + sortedProds.length;  // Excel 행 번호 (1-indexed)
+  // aoa 인덱스로는 lastProdRow - 1
+  aoa[lastProdRow - 1][8] = '합계';
+
+  // === aoa → 시트 ===
   const ws = XLSX.utils.aoa_to_sheet(aoa);
+
+  // === 수식 입력 ===
+  const sn_M = 'SUMIF(시리즈_당월!$A:$A,보고서!I{R},시리즈_당월!$B:$B)';
+  const sm_M_amt = 'SUMIF(시리즈_당월!$A:$A,보고서!I{R},시리즈_당월!$C:$C)';
+  const sn_D = 'SUMIF(시리즈_일일!$A:$A,보고서!I{R},시리즈_일일!$B:$B)';
+  const sm_D_amt = 'SUMIF(시리즈_일일!$A:$A,보고서!I{R},시리즈_일일!$C:$C)';
+
+  // 상품 행 수식
+  sortedProds.forEach((name, i) => {
+    const r = i + 4;  // Excel row (1-indexed)
+    const monthly = (slot.products || []).find(p => p.name === name) || { qty: 0, revenue_amount: 0 };
+    const today = (slot._products_today || []).find(p => p.name === name) || { qty: 0, revenue_amount: 0 };
+    setF(ws, `O${r}`, sn_M.replace('{R}', r), monthly.qty);
+    setF(ws, `P${r}`, sm_M_amt.replace('{R}', r), monthly.revenue_amount);
+    setF(ws, `R${r}`, sn_D.replace('{R}', r), today.qty);
+    setF(ws, `S${r}`, sm_D_amt.replace('{R}', r), today.revenue_amount);
+    // 당월마감 예상 = 당월매출 / 진행률 = (P{r}/$C$24)*$C$25
+    setF(ws, `V${r}`, `IFERROR((P${r}/$C$24)*$C$25,"")`,
+      d.day_progress > 0 ? monthly.revenue_amount / d.day_progress : 0);
+    // 차액 = 예상 - 전월매출
+    const forecast = d.day_progress > 0 ? monthly.revenue_amount / d.day_progress : 0;
+    setF(ws, `W${r}`, `IFERROR(V${r}-M${r},"")`, forecast - (monthly.revenue_amount > 0 || (prevAgg.products[name]?.revenue_amount || 0) > 0 ? (prevAgg.products[name]?.revenue_amount || 0) : 0));
+    // 증감률 = 예상/전월 - 1
+    const prevRev = prevAgg.products[name]?.revenue_amount || 0;
+    setF(ws, `X${r}`, `IFERROR(V${r}/M${r}-1,"")`, prevRev > 0 ? forecast / prevRev - 1 : '');
+  });
+
+  // 합계 행 수식
+  const sumRow = lastProdRow;  // Excel row
+  if (sortedProds.length > 0) {
+    const totalMonth = sortedProds.reduce((s, n) => s + ((slot.products || []).find(p => p.name === n)?.revenue_amount || 0), 0);
+    const totalDay = sortedProds.reduce((s, n) => s + ((slot._products_today || []).find(p => p.name === n)?.revenue_amount || 0), 0);
+    setF(ws, `M${sumRow}`, `SUM(M4:M${sumRow-1})`, sortedProds.reduce((s, n) => s + (prevAgg.products[n]?.revenue_amount || 0), 0));
+    setF(ws, `P${sumRow}`, `SUM(P4:P${sumRow-1})`, totalMonth);
+    setF(ws, `S${sumRow}`, `SUM(S4:S${sumRow-1})`, totalDay);
+    setF(ws, `V${sumRow}`, `SUM(V4:V${sumRow-1})`, d.day_progress > 0 ? totalMonth / d.day_progress : 0);
+    setF(ws, `W${sumRow}`, `V${sumRow}-M${sumRow}`,
+      (d.day_progress > 0 ? totalMonth / d.day_progress : 0) - sortedProds.reduce((s, n) => s + (prevAgg.products[n]?.revenue_amount || 0), 0));
+    setF(ws, `X${sumRow}`, `IFERROR(V${sumRow}/M${sumRow}-1,"")`, '');
+  }
+
+  // 좌측 요약 수식
+  // C13: 일 목표 = 당월 목표 / 총일수
+  setF(ws, 'C13', 'C11/C25', (d.monthly_goal || 0) / totalDays);
+  // C15: 월 매출 = 합계행의 P (당월 매출 합)
+  if (sortedProds.length > 0) {
+    setF(ws, 'C15', `P${sumRow}`, d.monthly_revenue || 0);
+    setF(ws, 'C17', `S${sumRow}`, d.daily_revenue || 0);
+    setF(ws, 'C29', `V${sumRow}`, d.month_forecast || 0);
+    setF(ws, 'C30', `C29-M${sumRow}`, (d.month_forecast || 0) - (prevAgg.totalRevenue || 0));
+    setF(ws, 'C31', `IFERROR(C30/M${sumRow},"")`, prevAgg.totalRevenue > 0 ? (d.month_forecast - prevAgg.totalRevenue) / prevAgg.totalRevenue : '');
+  } else {
+    if ((d.monthly_revenue || 0) !== 0) ws['C15'] = { t:'n', v: d.monthly_revenue };
+    if ((d.daily_revenue || 0) !== 0) ws['C17'] = { t:'n', v: d.daily_revenue };
+  }
+  // C26: 금일 진행률 = E/F
+  setF(ws, 'C26', 'C24/C25', dayOfMonth / totalDays);
+  // C19: 월 달성율 [기준] = 금일 진행률
+  setF(ws, 'C19', 'C26', dayOfMonth / totalDays);
+  // E19: 월 달성율 [달성] = 월 매출 / 당월 목표
+  setF(ws, 'E19', 'IFERROR(C15/C11,"")',
+    (d.monthly_goal || 0) > 0 ? (d.monthly_revenue || 0) / d.monthly_goal : '');
+  // C21: 일 달성율 = 일 매출 / 일 목표
+  setF(ws, 'C21', 'IFERROR(C17/C13,"")',
+    (d.daily_goal || 0) > 0 ? (d.daily_revenue || 0) / d.daily_goal : '');
+
   // 컬럼 너비
   ws['!cols'] = [
     {wch:2},{wch:22},{wch:14},{wch:2},{wch:10},{wch:2},{wch:2},{wch:2},
@@ -2179,8 +2233,44 @@ function buildReportSheet(slot, cg, date) {
     {wch:8},{wch:14},{wch:2},{wch:2},
     {wch:14},{wch:14},{wch:10}
   ];
-  return formatNumbers(ws);
+  // 백분율 컬럼: E19, C19, C21, C26, X{*}
+  // formatNumbers는 셀 단위가 아니라 컬럼 단위로 처리하므로 해당 셀에 직접 적용
+  formatNumbers(ws);
+  // 백분율 셀 후처리
+  ['C19','E19','C21','C26','C31'].forEach(ref => {
+    if (ws[ref] && typeof ws[ref].v === 'number') ws[ref].z = '0.0%';
+  });
+  // X열 (증감률)
+  for (let r = 4; r <= sumRow; r++) {
+    const ref = `X${r}`;
+    if (ws[ref] && typeof ws[ref].v === 'number') ws[ref].z = '0.0%';
+  }
+  return ws;
 }
+
+// 셀에 수식과 계산 값을 함께 저장
+function setF(ws, ref, formula, value) {
+  // 0이면 셀을 빈 상태로 두기 (위 formatNumbers와 일관성)
+  if (typeof value === 'number' && value === 0) {
+    return;
+  }
+  if (typeof value === 'number') {
+    ws[ref] = { t: 'n', f: formula, v: value };
+  } else if (value === '' || value == null) {
+    ws[ref] = { t: 's', f: formula, v: '' };
+  } else {
+    ws[ref] = { t: typeof value === 'number' ? 'n' : 's', f: formula, v: value };
+  }
+  // 시트 범위(!ref) 갱신
+  if (ws['!ref']) {
+    const range = XLSX.utils.decode_range(ws['!ref']);
+    const decoded = XLSX.utils.decode_cell(ref);
+    if (decoded.r > range.e.r) range.e.r = decoded.r;
+    if (decoded.c > range.e.c) range.e.c = decoded.c;
+    ws['!ref'] = XLSX.utils.encode_range(range);
+  }
+}
+
 
 // 숫자 셀에 천단위 콤마 자동 적용 + 0은 빈칸 처리
 function formatNumbers(ws, percentCols) {
