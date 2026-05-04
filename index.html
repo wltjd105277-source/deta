@@ -1166,7 +1166,7 @@ function render() {
   const goalGroups = viewChannels.filter(cg => store[currentDate][cg]?._source === '판매현황');
   let html = '';
   if (goalGroups.length > 0 && !filterCh) {
-    html += `<div class="panel" style="margin-bottom:16px;display:flex;flex-wrap:wrap;gap:14px;align-items:center;padding:14px 18px;">
+    html += `<div class="panel" style="margin-bottom:12px;display:flex;flex-wrap:wrap;gap:14px;align-items:center;padding:14px 18px;">
       <span style="font-size:13px;font-weight:600;">🎯 ${monthKey} 월 목표</span>
       ${goalGroups.map(cg => {
         const k = `goal_${cg}_${monthKey}`;
@@ -1179,6 +1179,36 @@ function render() {
       }).join('')}
       <span style="font-size:11px;color:var(--text-sub);">엔터로 저장</span>
     </div>`;
+
+    // 채널별 월 광고비 입력 패널
+    // 현재 일자에 매출이 있었던 모든 서브채널 수집
+    const adChannels = new Set();
+    for (const cg of goalGroups) {
+      (store[currentDate][cg]._channels_today || []).forEach(c => {
+        if (c.amount !== 0 || c.qty !== 0) adChannels.add(c.channel);
+      });
+    }
+    const adChannelList = Array.from(adChannels);
+    if (adChannelList.length > 0) {
+      html += `<details class="panel" style="margin-bottom:16px;padding:0;" id="adSpendPanel">
+        <summary style="padding:14px 18px;cursor:pointer;font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px;list-style:none;">
+          💰 ${monthKey} 채널별 광고비 <span style="font-size:11px;color:var(--text-sub);font-weight:500;">(클릭해서 펼치기)</span>
+        </summary>
+        <div style="padding:0 18px 16px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;border-top:1px solid var(--border);">
+          ${adChannelList.map(ch => {
+            const k = `adspend_${ch}_${monthKey}`;
+            const v = localStorage.getItem(k) || '';
+            const cls = ch.includes('쿠팡') ? 'coupang' : (ch === '스마트스토어' || ch === '오늘의집' ? 'shopn' : 'other');
+            return `<div style="display:flex;align-items:center;gap:6px;margin-top:10px;">
+              <span class="badge-ch ${cls}" style="white-space:nowrap;">${ch}</span>
+              <input type="number" data-adspend-key="${k}" value="${v}" placeholder="0"
+                style="width:130px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-variant-numeric:tabular-nums;">
+            </div>`;
+          }).join('')}
+          <span style="font-size:11px;color:var(--text-sub);margin-top:10px;">엔터로 저장 → 표에 순이익·순마진률 반영</span>
+        </div>
+      </details>`;
+    }
   }
 
   // KPI 카드
@@ -1247,27 +1277,35 @@ function render() {
     `;
   }
 
-  // 채널별 상세 표
+  // 채널별 상세 표 (광고비 / 순이익 / 순마진률 포함)
   html += `
     <div class="panel" style="margin-bottom:24px;">
-      <div class="panel-title"><span>📋 채널별 매출 상세</span></div>
-      <table>
-        <thead>
-          <tr>
-            <th>채널</th>
-            <th class="num">일 수량</th>
-            <th class="num">일 매출</th>
-            <th class="num">일 이익</th>
-            <th class="num">월 수량</th>
-            <th class="num">월 매출</th>
-            <th class="num">월 이익</th>
-            <th class="num">이익률</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${buildChannelTableRows(viewChannels.map(c => dayData[c].detail).filter(Boolean), filterCh)}
-        </tbody>
-      </table>
+      <div class="panel-title">
+        <span>📋 채널별 매출 상세</span>
+        <span style="font-size:11px;color:var(--text-sub);font-weight:500;">광고비는 위 💰 패널에서 입력</span>
+      </div>
+      <div style="overflow-x:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>채널</th>
+              <th class="num">일 수량</th>
+              <th class="num">일 매출</th>
+              <th class="num">일 이익</th>
+              <th class="num">월 수량</th>
+              <th class="num">월 매출</th>
+              <th class="num">월 이익</th>
+              <th class="num">이익률</th>
+              <th class="num" style="background:var(--primary-light);">월 광고비</th>
+              <th class="num" style="background:var(--primary-light);">순이익</th>
+              <th class="num" style="background:var(--primary-light);">순마진률</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${buildChannelTableRows(viewChannels.map(c => dayData[c].detail).filter(Boolean), filterCh, monthKey)}
+          </tbody>
+        </table>
+      </div>
     </div>
   `;
 
@@ -1451,7 +1489,7 @@ function aheadOrBehind(ach, prog) {
   return `<span style="color:var(--danger)">▼${Math.abs(d).toFixed(1)}%p 뒤짐</span>`;
 }
 
-function buildChannelTableRows(details, filterCh) {
+function buildChannelTableRows(details, filterCh, monthKey) {
   // 모든 채널 통합 (channel 명으로 join, 일/월 매칭)
   const map = {};
   details.forEach(d => {
@@ -1467,10 +1505,19 @@ function buildChannelTableRows(details, filterCh) {
     });
   });
   const rows = Object.values(map).sort((a,b) => b.ma - a.ma);
-  if (!rows.length) return '<tr><td colspan="8" style="text-align:center;color:var(--text-sub);">데이터 없음</td></tr>';
-  return rows.map(r => {
+  if (!rows.length) return '<tr><td colspan="11" style="text-align:center;color:var(--text-sub);">데이터 없음</td></tr>';
+  // 합계 행 데이터
+  const totalAd = rows.reduce((s, r) => s + (parseFloat(localStorage.getItem(`adspend_${r.channel}_${monthKey}`)) || 0), 0);
+  const totalMa = rows.reduce((s, r) => s + r.ma, 0);
+  const totalMp = rows.reduce((s, r) => s + r.mp, 0);
+  const totalNetProfit = totalMp - totalAd;
+
+  const rowsHtml = rows.map(r => {
     const margin = r.ma > 0 ? (r.mp / r.ma * 100).toFixed(1) + '%' : '-';
     const cls = r.channel.includes('쿠팡') ? 'coupang' : (r.channel.includes('지마켓')||r.channel.includes('나비')||r.channel.includes('십일')||r.channel.includes('토스') ? 'other' : 'shopn');
+    const adSpend = parseFloat(localStorage.getItem(`adspend_${r.channel}_${monthKey}`)) || 0;
+    const netProfit = r.mp - adSpend;
+    const netRate = r.ma > 0 ? (netProfit / r.ma * 100).toFixed(1) + '%' : '-';
     return `<tr>
       <td><span class="badge-ch ${cls}">${r.channel}</span></td>
       <td class="num">${fmt.num(r.dq)}</td>
@@ -1480,8 +1527,26 @@ function buildChannelTableRows(details, filterCh) {
       <td class="num"><strong>${fmt.won(r.ma)}</strong></td>
       <td class="num" style="color:${r.mp >= 0 ? 'var(--success)' : 'var(--danger)'}">${fmt.won(r.mp)}</td>
       <td class="num">${margin}</td>
+      <td class="num" style="background:#fafbff;color:${adSpend > 0 ? 'var(--text)' : 'var(--text-sub)'};">${adSpend > 0 ? fmt.won(adSpend) : '<span style="font-size:11px;">미입력</span>'}</td>
+      <td class="num" style="background:#fafbff;color:${netProfit >= 0 ? 'var(--success)' : 'var(--danger)'};font-weight:600;">${fmt.won(netProfit)}</td>
+      <td class="num" style="background:#fafbff;font-weight:600;">${netRate}</td>
     </tr>`;
   }).join('');
+  // 합계 행
+  const totalRate = totalMa > 0 ? (totalNetProfit / totalMa * 100).toFixed(1) + '%' : '-';
+  const totalMargin = totalMa > 0 ? (totalMp / totalMa * 100).toFixed(1) + '%' : '-';
+  const totalsHtml = `<tr style="background:var(--bg);font-weight:700;border-top:2px solid var(--border);">
+    <td>합계</td>
+    <td class="num">-</td><td class="num">-</td><td class="num">-</td>
+    <td class="num">-</td>
+    <td class="num">${fmt.won(totalMa)}</td>
+    <td class="num">${fmt.won(totalMp)}</td>
+    <td class="num">${totalMargin}</td>
+    <td class="num" style="background:#eef2ff;">${fmt.won(totalAd)}</td>
+    <td class="num" style="background:#eef2ff;color:${totalNetProfit >= 0 ? 'var(--success)' : 'var(--danger)'};">${fmt.won(totalNetProfit)}</td>
+    <td class="num" style="background:#eef2ff;">${totalRate}</td>
+  </tr>`;
+  return rowsHtml + totalsHtml;
 }
 
 function mergedTrend(slots) {
@@ -1852,16 +1917,30 @@ document.getElementById('btnExport').addEventListener('click', () => {
 
 // 월 목표 입력 (이벤트 위임 - 동적으로 추가되는 input들에 적용)
 document.body.addEventListener('change', e => {
-  const inp = e.target.closest('input[data-goal-key]');
-  if (!inp) return;
-  const k = inp.dataset.goalKey;
-  const v = inp.value;
-  if (v === '' || v === '0') localStorage.removeItem(k);
-  else localStorage.setItem(k, v);
-  recomputeAggregates();
-  saveStore();
-  render();
-  showToast('월 목표를 저장했습니다', 'success');
+  const goalInp = e.target.closest('input[data-goal-key]');
+  if (goalInp) {
+    const k = goalInp.dataset.goalKey;
+    const v = goalInp.value;
+    if (v === '' || v === '0') localStorage.removeItem(k);
+    else localStorage.setItem(k, v);
+    recomputeAggregates();
+    saveStore();
+    render();
+    showToast('월 목표를 저장했습니다', 'success');
+    return;
+  }
+  // 광고비 입력
+  const adInp = e.target.closest('input[data-adspend-key]');
+  if (adInp) {
+    const k = adInp.dataset.adspendKey;
+    const v = adInp.value;
+    if (v === '' || v === '0') localStorage.removeItem(k);
+    else localStorage.setItem(k, v);
+    saveStore();
+    render();
+    showToast('광고비를 저장했습니다', 'success');
+    return;
+  }
 });
 document.body.addEventListener('keydown', e => {
   const inp = e.target.closest('input[data-goal-key]');
