@@ -2182,7 +2182,7 @@ function buildReportSheet(slot, cg, date) {
   return formatNumbers(ws);
 }
 
-// 숫자 셀에 천단위 콤마 자동 적용
+// 숫자 셀에 천단위 콤마 자동 적용 + 0은 빈칸 처리
 function formatNumbers(ws, percentCols) {
   if (!ws['!ref']) return ws;
   const range = XLSX.utils.decode_range(ws['!ref']);
@@ -2191,6 +2191,11 @@ function formatNumbers(ws, percentCols) {
       const ref = XLSX.utils.encode_cell({ r, c });
       const cell = ws[ref];
       if (cell && typeof cell.v === 'number') {
+        if (cell.v === 0) {
+          // 0 → 빈칸 (시각적으로 깔끔)
+          delete ws[ref];
+          continue;
+        }
         if (percentCols && percentCols.includes(c)) {
           cell.z = '0.0%';
         } else if (Number.isInteger(cell.v)) {
