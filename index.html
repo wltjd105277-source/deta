@@ -711,6 +711,7 @@ function processSalesStatus(filename, wb) {
       _channels_today: channelsToday,
       _products_today: productsToday,
       _products_by_channel: productsByChannel,
+      _transactions: txns,  // 트랜잭션 원본 (Excel 다운로드용)
       _daily_total: { qty: totalQty, amount: totalAmount, profit: totalProfit, cost: totalCost },
       _files: [...(existing._files || []), { name: filename, type: '판매현황', ts: Date.now() }],
       detail: null, daily_trend: [], products: [],
@@ -2046,68 +2047,457 @@ function downloadExcel(kind) {
     showToast('먼저 일자를 선택해주세요', 'error');
     return;
   }
-  const channels = Object.keys(store[currentDate]);
+  const channels = Object.keys(store[currentDate]).filter(cg => store[currentDate][cg].detail);
   if (!channels.length) { showToast('데이터가 없습니다', 'error'); return; }
 
-  // 채널그룹별로 1개씩 파일 생성
   channels.forEach(cg => {
     const slot = store[currentDate][cg];
-    if (!slot.detail) { return; }
     const wb = XLSX.utils.book_new();
+    const dStr = currentDate.slice(2).replace(/-/g, '.');
+
     if (kind === 'detail') {
-      // 보고서 시트
-      const reportSheet = buildReportSheet(slot, cg, currentDate);
-      XLSX.utils.book_append_sheet(wb, reportSheet, '보고서');
-      // 일일 시트
-      const ilil = [['매출처명','순판매수량','순공급금액','순이익']];
-      (slot.detail.daily_channels || []).forEach(c => ilil.push([c.channel, c.qty, c.amount, c.profit]));
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ilil), '일일');
-      // 당월 시트
-      const dangwol = [['매출처명','순판매수량','순공급금액','순이익']];
-      (slot.detail.monthly_channels || []).forEach(c => dangwol.push([c.channel, c.qty, c.amount, c.profit]));
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(dangwol), '당월');
-      const dStr = currentDate.slice(2).replace(/-/g, '.');
+      // 보고서 / 일일 / 당월 / 시리즈_일일 / 시리즈_당월 / 작성방법 / Sheet1
+      XLSX.utils.book_append_sheet(wb, buildReportSheet(slot, cg, currentDate), '보고서');
+      XLSX.utils.book_append_sheet(wb, buildIlilSheet(slot, cg, false), '일일');
+      XLSX.utils.book_append_sheet(wb, buildIlilSheet(slot, cg, true),  '당월');
+      XLSX.utils.book_append_sheet(wb, buildSeriesSheet(slot, false), '시리즈_일일');
+      XLSX.utils.book_append_sheet(wb, buildSeriesSheet(slot, true),  '시리즈_당월');
+      XLSX.utils.book_append_sheet(wb, buildHowToSheet(), '작성방법');
+      XLSX.utils.book_append_sheet(wb, buildSheet1(slot), 'Sheet1');
       XLSX.writeFile(wb, `랜스타(${cg})_상세매출데이터_${dStr}.xlsx`);
     } else {
-      // 일별누적매출
-      const trend = [['일별 누적 매출'], [], [null,null,'데이터'], ['발주일','구분','수량','매입가','납품가','판매가','마진']];
-      (slot.daily_trend || []).forEach(t => trend.push([t.date, '누적', t.qty, t.cost, t.revenue, t.sale, t.margin]));
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(trend), '일별누적매출');
-      // 상품별누적판매
-      const prodSheet = [['상품별 판매 리스트'], [], [null,null,'데이터'], ['상품명','납품가','매입가','수량','판매가']];
-      (slot.products || []).forEach(p => prodSheet.push([p.name, p.revenue_amount, p.cost_amount, p.qty, p.revenue_amount]));
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(prodSheet), '상품별누적판매');
-      // 쇼핑몰별누적판매
-      const shopSheet = [['쇼핑몰별 판매 리스트'], [], [null,null,'데이터'], ['쇼핑몰','순판매수량','순공급금액','순이익']];
-      (slot.detail.monthly_channels || []).forEach(c => shopSheet.push([c.channel, c.qty, c.amount, c.profit]));
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(shopSheet), '쇼핑몰별누적판매');
-      const dStr = currentDate.slice(2).replace(/-/g, '.');
+      // 리스트 / 일별매출 / 일별누적매출 / 상품별누적판매 / 쇼핑몰별누적판매
+      XLSX.utils.book_append_sheet(wb, buildListSheet(slot, currentDate), '리스트');
+      XLSX.utils.book_append_sheet(wb, buildIlbyeolMaechul(slot), '일별매출');
+      XLSX.utils.book_append_sheet(wb, buildIlbyeolNujeok(slot), '일별누적매출');
+      XLSX.utils.book_append_sheet(wb, buildSangpum(slot), '상품별누적판매');
+      XLSX.utils.book_append_sheet(wb, buildShoppingMall(slot), '쇼핑몰별누적판매');
       XLSX.writeFile(wb, `랜스타(${cg})_매출리스트_${dStr}.xlsx`);
     }
   });
   showToast('Excel 파일을 다운로드합니다', 'success');
 }
 
+// ─────────── 상세매출데이터 시트 빌더 ───────────
+
 function buildReportSheet(slot, cg, date) {
   const d = slot.detail;
+  const month = date.slice(0, 7);
+  const [yy, mm] = month.split('-').map(Number);
+  const totalDays = new Date(yy, mm, 0).getDate();
+  const dayOfMonth = parseInt(date.slice(8, 10));
+  const prevAgg = getPrevMonthAgg(month, [cg]);
+
+  // 상품 통합 리스트 (당월 + 전월 + 일일을 모두 포함하기 위해 union)
+  const productNames = new Set();
+  (slot.products || []).forEach(p => productNames.add(p.name));
+  Object.keys(prevAgg.products).forEach(n => productNames.add(n));
+  (slot._products_today || []).forEach(p => productNames.add(p.name));
+  const sortedProds = Array.from(productNames).sort();
+
+  // 보고서 시트 데이터 - 좌측 요약 + 우측 상품 표
   const aoa = [];
-  // 33개 row, 8 col 정도 채움 - 원본과 유사한 레이아웃
   const blank = (cols) => Array(cols).fill(null);
-  for (let i = 0; i < 32; i++) aoa.push(blank(8));
+  // 보고서는 마지막 상품 행까지 길이 필요 → max(32, 4 + sortedProds.length)
+  const totalRows = Math.max(32, 4 + sortedProds.length);
+  for (let i = 0; i < totalRows; i++) aoa.push(blank(24));
+
+  // 좌측 요약
+  aoa[0][19] = '[ 수량 : ea / 단위 : 원(VAT포함) ]';
   aoa[1][1] = '일일 매출 보고서';
   aoa[4][1] = date;
-  aoa[7][1] = `라인업시스템㈜-랜스타 (${cg})`;
-  aoa[10][1] = ' 당월 목표 매출 A'; aoa[10][2] = d.monthly_goal;
-  aoa[12][1] = ' 일 목표 매출 B\n( A / F )'; aoa[12][2] = d.daily_goal;
-  aoa[14][1] = ' 월 납품가 매출 C'; aoa[14][2] = d.monthly_revenue;
-  aoa[16][1] = ' 일 납품가 매출 D'; aoa[16][2] = d.daily_revenue;
-  aoa[18][1] = ' 월 달성율\n[ 기준 / 달성 ]'; aoa[18][2] = d.day_progress; aoa[18][4] = d.month_achievement;
-  aoa[20][1] = ' 일 달성율\n( D / B)'; aoa[20][2] = d.daily_achievement;
-  aoa[23][1] = '금일 E'; aoa[23][2] = parseInt(date.slice(8,10));
-  const [yy, mm] = date.split('-').map(Number);
-  aoa[24][1] = '총일수 F'; aoa[24][2] = new Date(yy, mm, 0).getDate();
-  aoa[25][1] = '금일 진행률 G\n( E / F )'; aoa[25][2] = d.day_progress;
-  aoa[28][1] = '월마감 예상'; aoa[28][2] = d.month_forecast;
+  aoa[7][1] = `라인업시스템㈜-랜스타`;
+  aoa[10][1] = ' 당월 목표 매출 A'; aoa[10][2] = d.monthly_goal || 0;
+  aoa[12][1] = ' 일 목표 매출 B\n( A / F )'; aoa[12][2] = d.daily_goal || 0;
+  aoa[14][1] = ' 월 납품가 매출 C'; aoa[14][2] = d.monthly_revenue || 0;
+  aoa[16][1] = ' 일 납품가 매출 D'; aoa[16][2] = d.daily_revenue || 0;
+  aoa[18][1] = ' 월 달성율\n[ 기준 / 달성 ]';
+  aoa[18][2] = d.day_progress || 0;
+  aoa[18][4] = d.month_achievement || 0;
+  aoa[20][1] = ' 일 달성율\n( D / B)'; aoa[20][2] = d.daily_achievement || 0;
+  aoa[23][1] = '금일 E'; aoa[23][2] = dayOfMonth;
+  aoa[24][1] = '총일수 F'; aoa[24][2] = totalDays;
+  aoa[25][1] = '금일 진행률 G\n( E / F )'; aoa[25][2] = d.day_progress || 0;
+  aoa[28][1] = '월마감 예상'; aoa[28][2] = d.month_forecast || 0;
+  // 전월 대비
+  const prevTotal = prevAgg.totalRevenue || 0;
+  const fc = d.month_forecast || 0;
+  aoa[29][1] = '전월 vs 당월'; aoa[29][2] = fc - prevTotal;
+  aoa[30][1] = '증감률'; aoa[30][2] = prevTotal > 0 ? (fc - prevTotal) / prevTotal : '';
+
+  // 우측 상품 표 헤더
+  aoa[1][8] = '품목';
+  aoa[1][11] = '전월 누적';
+  aoa[1][14] = '당월 누적';
+  aoa[1][17] = '일일';
+  aoa[1][21] = '당월마감';
+  aoa[1][22] = '전월 vs 당월';
+  aoa[1][23] = '증감률';
+  aoa[2][11] = '수량';
+  aoa[2][12] = '납품가 매출';
+  aoa[2][14] = '수량';
+  aoa[2][15] = '납품가 매출';
+  aoa[2][17] = '수량';
+  aoa[2][18] = '납품가 매출';
+  aoa[2][21] = '예상금액';
+  aoa[2][22] = '차액';
+
+  // 상품 행: I=8 모델, L=11 전월수량, M=12 전월매출, O=14 당월수량, P=15 당월매출, R=17 일일수량, S=18 일일매출, V=21 예상, W=22 차액, X=23 증감률
+  sortedProds.forEach((name, i) => {
+    const row = 3 + i;
+    const monthly = (slot.products || []).find(p => p.name === name) || { qty: 0, revenue_amount: 0 };
+    const prev = prevAgg.products[name] || { qty: 0, revenue_amount: 0 };
+    const today = (slot._products_today || []).find(p => p.name === name) || { qty: 0, revenue_amount: 0 };
+    aoa[row][8] = name;
+    aoa[row][11] = prev.qty;
+    aoa[row][12] = prev.revenue_amount;
+    aoa[row][14] = monthly.qty;
+    aoa[row][15] = monthly.revenue_amount;
+    aoa[row][17] = today.qty;
+    aoa[row][18] = today.revenue_amount;
+    // 당월마감 예상 = 당월 매출 / day_progress
+    const forecast = d.day_progress > 0 ? monthly.revenue_amount / d.day_progress : 0;
+    aoa[row][21] = forecast;
+    aoa[row][22] = forecast - prev.revenue_amount;
+    aoa[row][23] = prev.revenue_amount > 0 ? (forecast - prev.revenue_amount) / prev.revenue_amount : '';
+  });
+
+  return XLSX.utils.aoa_to_sheet(aoa);
+}
+
+function buildIlilSheet(slot, cg, isMonthly) {
+  // 일일 / 당월 시트: 매출처명 | 순판매수량 | 순공급금액 | 순이익
+  const data = isMonthly ? (slot.detail.monthly_channels || []) : (slot.detail.daily_channels || []);
+  const dataMap = {};
+  data.forEach(c => dataMap[c.channel] = c);
+  // 표준 채널 순서대로 표시 + 데이터에 있는 추가 채널
+  const groupChs = (typeof GROUP_CHANNELS !== 'undefined' && GROUP_CHANNELS[cg]) || [];
+  const knownInData = data.map(c => c.channel);
+  const allChs = [...new Set([...groupChs, ...knownInData])];
+
+  const aoa = [['매출처명', '순판매수량', '순공급금액', '순이익']];
+  allChs.forEach(ch => {
+    const c = dataMap[ch];
+    aoa.push([
+      ch,
+      c && c.qty ? c.qty : null,
+      c && c.amount ? c.amount : null,
+      c && c.profit !== undefined ? c.profit : null,
+    ]);
+  });
+  return XLSX.utils.aoa_to_sheet(aoa);
+}
+
+function buildSeriesSheet(slot, isMonthly) {
+  // 시리즈_일일 / 시리즈_당월: 시리즈명 | 순판매수량 | 순공급금액 | 순이익
+  const products = isMonthly ? (slot.products || []) : (slot._products_today || []);
+  const aoa = [['시리즈명', '순판매수량', '순공급금액', '순이익', null, '시리즈명']];
+  products
+    .filter(p => p.qty || p.revenue_amount)
+    .sort((a, b) => (b.revenue_amount || 0) - (a.revenue_amount || 0))
+    .forEach(p => {
+      aoa.push([p.name, p.qty || 0, p.revenue_amount || 0, (p.revenue_amount || 0) - (p.cost_amount || 0), null, null]);
+    });
+  return XLSX.utils.aoa_to_sheet(aoa);
+}
+
+function buildHowToSheet() {
+  return XLSX.utils.aoa_to_sheet([
+    ['일일 / 당월', null],
+    [' - 기존 작성하시던 데이터에서 \'sheet쇼핑몰별누적판매\'에서 값추출(*시리즈명/수량/공급가액/마진)', null],
+    [' - 새창열어서 텍스트만 복사/붙여넣기', null],
+    [' - 쇼핑몰/수량/납품가/마진 항목만 순서대로 남겨두고 삭제', null],
+    [' - 복사해서 새로운 일일매출보고서 \'sheet일일\' 및 \'sheet당월\' 에 붙여넣기', null],
+    [null, null],
+    ['시리즈 일일 / 당월', null],
+    [null, null],
+    [' - 기존 작성하시던 데이터에서 \'sheet일별매출\'에서 값추출', null],
+    [' - 새창열어서 텍스트만 복사/붙여넣기', null],
+    [' - 상품명/수량/납품가/마진 항목만 순서대로 남겨두고 삭제', null],
+    [' - 복사해서 새로운 일일매출보고서 \'sheet시리즈_일일\' 및 \'sheet시리즈_당월\' 에 붙여넣기', null],
+    [' - 시리즈명 기입', null],
+    [null, null],
+    ['※ 주의사항', null],
+    [' - 시리즈명 통일할것.', null],
+    [null, null],
+    [' - 당월 판매처 하단 기본값은 그대로 둘 것.(보고서 판매처 전월 / 당월 비교용)', null],
+    [null, null],
+    [null, null],
+    ['이름통일', null],
+  ]);
+}
+
+function buildSheet1(slot) {
+  // 시리즈명 / 순판매수량 / 순공급금액 - 누적
+  const products = slot.products || [];
+  const aoa = [['시리즈명', '순판매수량', '순공급금액']];
+  products
+    .sort((a, b) => (b.revenue_amount || 0) - (a.revenue_amount || 0))
+    .forEach(p => aoa.push([p.name, p.qty || 0, p.revenue_amount || 0]));
+  return XLSX.utils.aoa_to_sheet(aoa);
+}
+
+// ─────────── 매출리스트 시트 빌더 ───────────
+
+function buildListSheet(slot, currentDate) {
+  // 정산월 / 발주월 / 적정재고 / 발주일 / 쇼핑몰 / 상품명 / 모델명 / 수량 / 구분 / 배송료 / 사은품 / 고객배송비
+  // 매입단가(원가) / 매입가(합계) / 납품단가 / 납품가(합계) / 판매단가 / 판매가(합계) / 사은품 / 입금부대비용 / 지급부대비용 / 마진
+  const headers = ['정산월','발주월','적정재고','발주일','쇼핑몰','상품명','모델명','수량','구분','배송료','사은품','고객배송비','매입단가(원가)','매입가(합계)','납품단가','납품가(합계)','판매단가','판매가(합계)','사은품','입금부대비용','지급부대비용','마진'];
+  const aoa = [headers];
+
+  // 그 달의 모든 트랜잭션을 모음 (현재 일자뿐만 아니라 같은 달 전체)
+  const month = currentDate.slice(0, 7);
+  const cg = slot.channel;
+  const monthYY = month.slice(2, 4) + '-' + month.slice(5, 7);
+  const txnMaster = [];
+  for (const d of Object.keys(store).sort()) {
+    if (!d.startsWith(month)) continue;
+    const s = store[d][cg];
+    if (!s || !s._transactions) continue;
+    s._transactions.forEach(t => {
+      const ch = channelMap(t.shop);
+      const itemCode = String(t.item_code || '');
+      const isDelivery = itemCode.startsWith('DEL-');
+      const groupName = String(t.group_name || '');
+      const isDiscount = /판매장려금/.test(groupName);
+      let category = '주문';
+      if (isDelivery) category = '배송비';
+      else if (isDiscount) category = '할인';
+      else if ((t.qty || 0) < 0) category = '반품';
+      const qty = t.qty || 0;
+      const amount = t.amount || 0;
+      const cost = (t.cost_unit || 0) * qty;
+      const margin = amount - cost;
+      const unitPrice = qty !== 0 ? amount / qty : 0;
+      aoa.push([
+        null, monthYY, null, d, ch,
+        t.desc || '', t.model || '',
+        qty, category, null, null, null,
+        t.cost_unit || 0, cost, unitPrice, amount, unitPrice, amount,
+        null, 0, 0, margin
+      ]);
+    });
+  }
+  return XLSX.utils.aoa_to_sheet(aoa);
+}
+
+function buildIlbyeolMaechul(slot) {
+  // 일별 매출 리스트 (피벗): 발주일 | 쇼핑몰 | 상품명 | 구분 | 수량 | 매입가 | 납품가 | 판매가 | 입금부대비용 | 지급부대비용 | 마진
+  const aoa = [
+    ['일별 매출 리스트'],
+    [],
+    [null, null, null, null, '데이터'],
+    ['발주일','쇼핑몰','상품명','구분','수량.','매입가','납품가','판매가','입금부대비용.','지급부대비용.','마진.']
+  ];
+
+  const month = slot.upload_date.slice(0, 7);
+  const cg = slot.channel;
+  // 일자별 → 쇼핑몰별 → 상품별 트랜잭션 모으기
+  const dates = Object.keys(store).filter(d => d.startsWith(month) && store[d][cg]?._transactions).sort();
+  for (const d of dates) {
+    const txns = store[d][cg]._transactions;
+    // 쇼핑몰별로 그룹화
+    const byShop = {};
+    txns.forEach(t => {
+      const ch = channelMap(t.shop);
+      if (!byShop[ch]) byShop[ch] = [];
+      byShop[ch].push(t);
+    });
+    let dateShown = false;
+    for (const ch of Object.keys(byShop).sort((a,b) => {
+      const aSum = byShop[a].reduce((s,t) => s + (t.amount||0), 0);
+      const bSum = byShop[b].reduce((s,t) => s + (t.amount||0), 0);
+      return bSum - aSum;
+    })) {
+      const shopTxns = byShop[ch];
+      let shopShown = false;
+      let shopQty=0, shopCost=0, shopAmt=0, shopMargin=0;
+      shopTxns.forEach(t => {
+        const itemCode = String(t.item_code || '');
+        const isDelivery = itemCode.startsWith('DEL-');
+        const groupName = String(t.group_name || '');
+        const isDiscount = /판매장려금/.test(groupName);
+        let category = '주문';
+        if (isDelivery) category = '배송비';
+        else if (isDiscount) category = '할인';
+        else if ((t.qty || 0) < 0) category = '반품';
+        const qty = t.qty || 0;
+        const amount = t.amount || 0;
+        const cost = (t.cost_unit || 0) * qty;
+        const margin = amount - cost;
+        const name = isDelivery ? '택배' : (t.model || t.desc || '');
+        aoa.push([
+          dateShown ? null : d,
+          shopShown ? null : ch,
+          name, category,
+          qty, cost, amount, amount, 0, 0, margin
+        ]);
+        dateShown = true; shopShown = true;
+        shopQty += qty; shopCost += cost; shopAmt += amount; shopMargin += margin;
+      });
+      // 쇼핑몰 요약 행
+      aoa.push([null, ch + ' 요약', null, null, shopQty, shopCost, shopAmt, shopAmt, 0, 0, shopMargin]);
+    }
+  }
+  return XLSX.utils.aoa_to_sheet(aoa);
+}
+
+function buildIlbyeolNujeok(slot) {
+  // 일별 누적 매출: 발주일 | 구분 | 수량 | 매입가 | 납품가 | 판매가 | 마진
+  const aoa = [
+    ['일별 누적 매출'],
+    [],
+    [null, null, '데이터'],
+    ['발주일','구분','수량.','매입가','납품가','판매가','마진.']
+  ];
+
+  const month = slot.upload_date.slice(0, 7);
+  const cg = slot.channel;
+  const dates = Object.keys(store).filter(d => d.startsWith(month) && store[d][cg]?._transactions).sort();
+  let totalQty=0, totalCost=0, totalAmt=0, totalMargin=0;
+  for (const d of dates) {
+    const txns = store[d][cg]._transactions;
+    const byCat = { '주문': {qty:0,cost:0,amt:0,margin:0}, '반품': {qty:0,cost:0,amt:0,margin:0}, '배송비': {qty:0,cost:0,amt:0,margin:0}, '할인': {qty:0,cost:0,amt:0,margin:0} };
+    txns.forEach(t => {
+      const itemCode = String(t.item_code || '');
+      const isDelivery = itemCode.startsWith('DEL-');
+      const groupName = String(t.group_name || '');
+      const isDiscount = /판매장려금/.test(groupName);
+      let category = '주문';
+      if (isDelivery) category = '배송비';
+      else if (isDiscount) category = '할인';
+      else if ((t.qty || 0) < 0) category = '반품';
+      const qty = t.qty || 0;
+      const amount = t.amount || 0;
+      const cost = (t.cost_unit || 0) * qty;
+      const margin = amount - cost;
+      byCat[category].qty += qty;
+      byCat[category].cost += cost;
+      byCat[category].amt += amount;
+      byCat[category].margin += margin;
+    });
+    let dateShown = false;
+    let dQty=0, dCost=0, dAmt=0, dMargin=0;
+    ['반품','주문','배송비','할인'].forEach(cat => {
+      const v = byCat[cat];
+      if (v.qty === 0 && v.amt === 0) return;
+      aoa.push([dateShown ? null : d, cat, v.qty, v.cost, v.amt, v.amt, v.margin]);
+      dateShown = true;
+      dQty += v.qty; dCost += v.cost; dAmt += v.amt; dMargin += v.margin;
+    });
+    totalQty += dQty; totalCost += dCost; totalAmt += dAmt; totalMargin += dMargin;
+    aoa.push(['누적', null, totalQty, totalCost, totalAmt, totalAmt, totalMargin]);
+  }
+  return XLSX.utils.aoa_to_sheet(aoa);
+}
+
+function buildSangpum(slot) {
+  // 상품별 누적 판매: 상품명 + 1주문/3반품/배송비 별 (납품가, 매입가, 수량, 판매가)
+  const aoa = [
+    ['쇼핑몰', '(모두)'],
+    [],
+    [null, '구분', '데이터'],
+    [null, '1주문', null, null, null, '3반품', null, null, null, '배송비'],
+    ['상품명','납품가','매입가','수량.','판매가','납품가','매입가','수량.','판매가','납품가','매입가','수량.']
+  ];
+
+  // 상품별 + 구분별 집계
+  const month = slot.upload_date.slice(0, 7);
+  const cg = slot.channel;
+  const dates = Object.keys(store).filter(d => d.startsWith(month) && store[d][cg]?._transactions).sort();
+  const map = {};  // name → { 주문: {amt,cost,qty}, 반품:..., 배송비:... }
+  for (const d of dates) {
+    store[d][cg]._transactions.forEach(t => {
+      const itemCode = String(t.item_code || '');
+      const isDelivery = itemCode.startsWith('DEL-');
+      const groupName = String(t.group_name || '');
+      const isDiscount = /판매장려금/.test(groupName);
+      if (isDiscount) return;  // 할인 제외
+      let category = '주문';
+      if (isDelivery) category = '배송비';
+      else if ((t.qty || 0) < 0) category = '반품';
+      const name = isDelivery ? '택배' : (t.model || t.desc || '');
+      if (!name) return;
+      const qty = t.qty || 0;
+      const amount = t.amount || 0;
+      const cost = (t.cost_unit || 0) * qty;
+      if (!map[name]) map[name] = { '주문':{amt:0,cost:0,qty:0}, '반품':{amt:0,cost:0,qty:0}, '배송비':{amt:0,cost:0,qty:0} };
+      map[name][category].amt += amount;
+      map[name][category].cost += cost;
+      map[name][category].qty += qty;
+    });
+  }
+  Object.keys(map).sort().forEach(name => {
+    const r = map[name];
+    aoa.push([
+      name,
+      r['주문'].amt || null, r['주문'].cost || null, r['주문'].qty || null, r['주문'].amt || null,
+      r['반품'].amt || null, r['반품'].cost || null, r['반품'].qty || null, r['반품'].amt || null,
+      r['배송비'].amt || null, r['배송비'].cost || null, r['배송비'].qty || null,
+    ]);
+  });
+  return XLSX.utils.aoa_to_sheet(aoa);
+}
+
+function buildShoppingMall(slot) {
+  // 쇼핑몰별 누적 판매: 쇼핑몰 | 구분 | 수량 | 매입가 | 납품가 | 판매가 | 합계: 마진
+  const aoa = [
+    ['쇼핑몰별 판매 리스트'],
+    [],
+    [null, null, '데이터'],
+    ['쇼핑몰','구분','수량.','매입가','납품가','판매가','합계 : 마진']
+  ];
+
+  const month = slot.upload_date.slice(0, 7);
+  const cg = slot.channel;
+  const dates = Object.keys(store).filter(d => d.startsWith(month) && store[d][cg]?._transactions).sort();
+  // 쇼핑몰 → 구분별 집계
+  const byShop = {};
+  for (const d of dates) {
+    store[d][cg]._transactions.forEach(t => {
+      const ch = channelMap(t.shop);
+      const itemCode = String(t.item_code || '');
+      const isDelivery = itemCode.startsWith('DEL-');
+      const groupName = String(t.group_name || '');
+      const isDiscount = /판매장려금/.test(groupName);
+      let category = '주문';
+      if (isDelivery) category = '배송비';
+      else if (isDiscount) category = '할인';
+      else if ((t.qty || 0) < 0) category = '반품';
+      const qty = t.qty || 0;
+      const amount = t.amount || 0;
+      const cost = (t.cost_unit || 0) * qty;
+      const margin = amount - cost;
+      if (!byShop[ch]) byShop[ch] = {};
+      if (!byShop[ch][category]) byShop[ch][category] = { qty:0, cost:0, amt:0, margin:0 };
+      byShop[ch][category].qty += qty;
+      byShop[ch][category].cost += cost;
+      byShop[ch][category].amt += amount;
+      byShop[ch][category].margin += margin;
+    });
+  }
+
+  // 매출 큰 순으로 쇼핑몰 정렬
+  const shopList = Object.keys(byShop).sort((a, b) => {
+    const aSum = Object.values(byShop[a]).reduce((s, v) => s + v.amt, 0);
+    const bSum = Object.values(byShop[b]).reduce((s, v) => s + v.amt, 0);
+    return bSum - aSum;
+  });
+  let grandQty=0, grandCost=0, grandAmt=0, grandMargin=0;
+  shopList.forEach(shop => {
+    let shopShown = false;
+    let sQty=0, sCost=0, sAmt=0, sMargin=0;
+    ['반품','주문','배송비','할인'].forEach(cat => {
+      const v = byShop[shop][cat];
+      if (!v || (v.qty === 0 && v.amt === 0)) return;
+      aoa.push([shopShown ? null : shop, cat, v.qty, v.cost, v.amt, v.amt, v.margin]);
+      shopShown = true;
+      sQty += v.qty; sCost += v.cost; sAmt += v.amt; sMargin += v.margin;
+    });
+    aoa.push([shop + ' 요약', null, sQty, sCost, sAmt, sAmt, sMargin]);
+    grandQty += sQty; grandCost += sCost; grandAmt += sAmt; grandMargin += sMargin;
+  });
+  aoa.push(['총합계', null, grandQty, grandCost, grandAmt, grandAmt, grandMargin]);
   return XLSX.utils.aoa_to_sheet(aoa);
 }
 
