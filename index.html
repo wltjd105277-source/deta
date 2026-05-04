@@ -2088,12 +2088,19 @@ function buildReportSheet(slot, cg, date) {
   const dayOfMonth = parseInt(date.slice(8, 10));
   const prevAgg = getPrevMonthAgg(month, [cg]);
 
-  // 상품 통합 리스트 (당월 + 전월 + 일일을 모두 포함하기 위해 union)
+  // 상품 통합 리스트 (당월 + 전월 + 일일 모두 union, 당월 매출 desc 정렬)
+  const productMonthlyMap = {};
+  (slot.products || []).forEach(p => productMonthlyMap[p.name] = p.revenue_amount || 0);
   const productNames = new Set();
   (slot.products || []).forEach(p => productNames.add(p.name));
   Object.keys(prevAgg.products).forEach(n => productNames.add(n));
   (slot._products_today || []).forEach(p => productNames.add(p.name));
-  const sortedProds = Array.from(productNames).sort();
+  const sortedProds = Array.from(productNames).sort((a, b) => {
+    const av = productMonthlyMap[a] || 0;
+    const bv = productMonthlyMap[b] || 0;
+    if (bv !== av) return bv - av;
+    return a.localeCompare(b);
+  });
 
   // 보고서 시트 데이터 - 좌측 요약 + 우측 상품 표
   const aoa = [];
@@ -2162,7 +2169,39 @@ function buildReportSheet(slot, cg, date) {
     aoa[row][23] = prev.revenue_amount > 0 ? (forecast - prev.revenue_amount) / prev.revenue_amount : '';
   });
 
-  return XLSX.utils.aoa_to_sheet(aoa);
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  // 컬럼 너비
+  ws['!cols'] = [
+    {wch:2},{wch:22},{wch:14},{wch:2},{wch:10},{wch:2},{wch:2},{wch:2},
+    {wch:22},{wch:2},{wch:2},
+    {wch:8},{wch:14},{wch:2},
+    {wch:8},{wch:14},{wch:2},
+    {wch:8},{wch:14},{wch:2},{wch:2},
+    {wch:14},{wch:14},{wch:10}
+  ];
+  return formatNumbers(ws);
+}
+
+// 숫자 셀에 천단위 콤마 자동 적용
+function formatNumbers(ws, percentCols) {
+  if (!ws['!ref']) return ws;
+  const range = XLSX.utils.decode_range(ws['!ref']);
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const ref = XLSX.utils.encode_cell({ r, c });
+      const cell = ws[ref];
+      if (cell && typeof cell.v === 'number') {
+        if (percentCols && percentCols.includes(c)) {
+          cell.z = '0.0%';
+        } else if (Number.isInteger(cell.v)) {
+          cell.z = '#,##0';
+        } else {
+          cell.z = '#,##0.0';
+        }
+      }
+    }
+  }
+  return ws;
 }
 
 function buildIlilSheet(slot, cg, isMonthly) {
@@ -2185,7 +2224,9 @@ function buildIlilSheet(slot, cg, isMonthly) {
       c && c.profit !== undefined ? c.profit : null,
     ]);
   });
-  return XLSX.utils.aoa_to_sheet(aoa);
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{wch:18},{wch:12},{wch:14},{wch:14}];
+  return formatNumbers(ws);
 }
 
 function buildSeriesSheet(slot, isMonthly) {
@@ -2198,7 +2239,9 @@ function buildSeriesSheet(slot, isMonthly) {
     .forEach(p => {
       aoa.push([p.name, p.qty || 0, p.revenue_amount || 0, (p.revenue_amount || 0) - (p.cost_amount || 0), null, null]);
     });
-  return XLSX.utils.aoa_to_sheet(aoa);
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{wch:22},{wch:12},{wch:14},{wch:14},{wch:2},{wch:22}];
+  return formatNumbers(ws);
 }
 
 function buildHowToSheet() {
@@ -2234,7 +2277,9 @@ function buildSheet1(slot) {
   products
     .sort((a, b) => (b.revenue_amount || 0) - (a.revenue_amount || 0))
     .forEach(p => aoa.push([p.name, p.qty || 0, p.revenue_amount || 0]));
-  return XLSX.utils.aoa_to_sheet(aoa);
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{wch:22},{wch:12},{wch:14}];
+  return formatNumbers(ws);
 }
 
 // ─────────── 매출리스트 시트 빌더 ───────────
@@ -2278,7 +2323,14 @@ function buildListSheet(slot, currentDate) {
       ]);
     });
   }
-  return XLSX.utils.aoa_to_sheet(aoa);
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [
+    {wch:8},{wch:8},{wch:8},{wch:11},{wch:14},{wch:50},{wch:18},
+    {wch:6},{wch:8},{wch:8},{wch:8},{wch:10},
+    {wch:12},{wch:13},{wch:12},{wch:13},{wch:12},{wch:13},
+    {wch:6},{wch:11},{wch:11},{wch:11}
+  ];
+  return formatNumbers(ws);
 }
 
 function buildIlbyeolMaechul(slot) {
@@ -2339,7 +2391,9 @@ function buildIlbyeolMaechul(slot) {
       aoa.push([null, ch + ' 요약', null, null, shopQty, shopCost, shopAmt, shopAmt, 0, 0, shopMargin]);
     }
   }
-  return XLSX.utils.aoa_to_sheet(aoa);
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{wch:11},{wch:14},{wch:18},{wch:8},{wch:7},{wch:12},{wch:12},{wch:12},{wch:11},{wch:11},{wch:11}];
+  return formatNumbers(ws);
 }
 
 function buildIlbyeolNujeok(slot) {
@@ -2388,7 +2442,9 @@ function buildIlbyeolNujeok(slot) {
     totalQty += dQty; totalCost += dCost; totalAmt += dAmt; totalMargin += dMargin;
     aoa.push(['누적', null, totalQty, totalCost, totalAmt, totalAmt, totalMargin]);
   }
-  return XLSX.utils.aoa_to_sheet(aoa);
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{wch:11},{wch:8},{wch:8},{wch:14},{wch:14},{wch:14},{wch:14}];
+  return formatNumbers(ws);
 }
 
 function buildSangpum(slot) {
@@ -2436,7 +2492,9 @@ function buildSangpum(slot) {
       r['배송비'].amt || null, r['배송비'].cost || null, r['배송비'].qty || null,
     ]);
   });
-  return XLSX.utils.aoa_to_sheet(aoa);
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{wch:22},{wch:12},{wch:12},{wch:8},{wch:12},{wch:12},{wch:12},{wch:8},{wch:12},{wch:12},{wch:12},{wch:8}];
+  return formatNumbers(ws);
 }
 
 function buildShoppingMall(slot) {
@@ -2498,7 +2556,9 @@ function buildShoppingMall(slot) {
     grandQty += sQty; grandCost += sCost; grandAmt += sAmt; grandMargin += sMargin;
   });
   aoa.push(['총합계', null, grandQty, grandCost, grandAmt, grandAmt, grandMargin]);
-  return XLSX.utils.aoa_to_sheet(aoa);
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{wch:18},{wch:8},{wch:8},{wch:14},{wch:14},{wch:14},{wch:14}];
+  return formatNumbers(ws);
 }
 
 document.getElementById('btnImport').addEventListener('click', () => document.getElementById('importInput').click());
