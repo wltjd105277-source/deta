@@ -1318,6 +1318,11 @@ function render() {
     </div>
   `;
 
+  // 전월 상품 매출 맵
+  const prevProdMap = filterCh
+    ? (prevAgg.productsByChannel[filterCh] || {})
+    : prevAgg.products;
+
   // 상품 순위 (사이트별 필터 + 일별/월별 토글)
   // 일별 상품
   const productsDaily = filterCh
@@ -1359,7 +1364,7 @@ function render() {
         </div>
       </div>
       <div id="prodTableWrap">
-        ${buildProductTable(getProds(), prodSort, prodPeriod, prodSortDir)}
+        ${buildProductTable(getProds(), prodSort, prodPeriod, prodSortDir, prodPeriod === 'monthly' ? prevProdMap : null)}
       </div>
     </div>
   `;
@@ -1402,7 +1407,7 @@ function render() {
       if (titleEl) {
         titleEl.innerHTML = `🏆 상품별 ${prodPeriod === 'daily' ? '일' : '월 누적'} 판매 ${filterCh ? `<span style="color:var(--primary);font-size:13px;">(${filterCh})</span> ` : ''}<span style="color:var(--text-sub);font-size:12px;font-weight:500;">총 ${prods.length}개</span>`;
       }
-      document.getElementById('prodTableWrap').innerHTML = buildProductTable(prods, prodSort, prodPeriod, prodSortDir);
+      document.getElementById('prodTableWrap').innerHTML = buildProductTable(prods, prodSort, prodPeriod, prodSortDir, prodPeriod === 'monthly' ? prevProdMap : null);
       bindProdHeadSort();
     });
   });
@@ -1416,7 +1421,7 @@ function render() {
       });
       el.style.background = 'var(--primary)';
       el.style.color = 'white';
-      document.getElementById('prodTableWrap').innerHTML = buildProductTable(getProds(), prodSort, prodPeriod, prodSortDir);
+      document.getElementById('prodTableWrap').innerHTML = buildProductTable(getProds(), prodSort, prodPeriod, prodSortDir, prodPeriod === 'monthly' ? prevProdMap : null);
       bindProdHeadSort();
     });
   });
@@ -1433,7 +1438,7 @@ function render() {
           // 텍스트는 기본 오름, 숫자는 기본 내림
           prodSortDir = (col === 'name') ? 'asc' : 'desc';
         }
-        document.getElementById('prodTableWrap').innerHTML = buildProductTable(getProds(), prodSort, prodPeriod, prodSortDir);
+        document.getElementById('prodTableWrap').innerHTML = buildProductTable(getProds(), prodSort, prodPeriod, prodSortDir, prodPeriod === 'monthly' ? prevProdMap : null);
         bindProdHeadSort();
       });
     });
@@ -1539,6 +1544,7 @@ function buildChannelTableRows(details, filterCh, monthKey) {
       <td class="num" style="background:#fafbff;color:${adSpend > 0 ? 'var(--text)' : 'var(--text-sub)'};">${adSpend > 0 ? fmt.won(adSpend) : '<span style="font-size:11px;">미입력</span>'}</td>
       <td class="num" style="background:#fafbff;color:${netProfit >= 0 ? 'var(--success)' : 'var(--danger)'};font-weight:600;">${fmt.won(netProfit)}</td>
       <td class="num" style="background:#fafbff;font-weight:600;">${netRate}</td>
+      <td class="num">${changeBadge(r.ma, prevAgg?.channels[r.channel]?.amount)}</td>
     </tr>`;
   }).join('');
   // 합계 행
@@ -1554,6 +1560,7 @@ function buildChannelTableRows(details, filterCh, monthKey) {
     <td class="num" style="background:#eef2ff;">${fmt.won(totalAd)}</td>
     <td class="num" style="background:#eef2ff;color:${totalNetProfit >= 0 ? 'var(--success)' : 'var(--danger)'};">${fmt.won(totalNetProfit)}</td>
     <td class="num" style="background:#eef2ff;">${totalRate}</td>
+    <td class="num">${changeBadge(totalMa, prevAgg ? (filterCh ? (prevAgg.channels[filterCh]?.amount || 0) : prevAgg.totalRevenue) : null)}</td>
   </tr>`;
   return rowsHtml + totalsHtml;
 }
@@ -1589,7 +1596,7 @@ function mergedProducts(slots) {
   return Object.values(map);
 }
 
-function buildProductTable(products, sortBy, period, sortDir) {
+function buildProductTable(products, sortBy, period, sortDir, prevProds) {
   const totalRev = products.reduce((s,p) => s + (p.revenue_amount || 0), 0);
   if (!products.length) {
     return '<div style="padding:40px;text-align:center;color:var(--text-sub);font-size:13px;">판매된 상품이 없습니다</div>';
@@ -1626,6 +1633,7 @@ function buildProductTable(products, sortBy, period, sortDir) {
           <th class="num" data-sort-col="revenue_amount" style="${headStyle('revenue_amount')}">${prefix} 매출 (납품가)${arrow('revenue_amount')}</th>
           <th class="num" data-sort-col="share" style="${headStyle('share')}">매출 비중${arrow('share')}</th>
           <th class="num" data-sort-col="margin" style="${headStyle('margin')}">예상 마진${arrow('margin')}</th>
+          ${prevProds ? '<th class="num">전월 대비</th>' : ''}
         </tr>
       </thead>
       <tbody>
@@ -1639,6 +1647,7 @@ function buildProductTable(products, sortBy, period, sortDir) {
             <td class="num">${fmt.won(p.revenue_amount)}</td>
             <td class="num">${share}</td>
             <td class="num" style="color:${margin >= 0 ? 'var(--success)' : 'var(--danger)'}">${fmt.won(margin)}</td>
+            ${prevProds ? `<td class="num">${changeBadge(p.revenue_amount || 0, prevProds[p.name]?.revenue_amount)}</td>` : ''}
           </tr>`;
         }).join('')}
       </tbody>
