@@ -74,12 +74,42 @@
     text-transform: uppercase; letter-spacing: 0.5px;
     margin-bottom: 8px; padding: 0 4px;
   }
-  .date-list { display: flex; flex-direction: column; gap: 4px; max-height: 400px; overflow-y: auto; }
-  .date-item {
-    padding: 10px 12px;
+  .date-list { display: flex; flex-direction: column; gap: 2px; max-height: 50vh; overflow-y: auto; }
+  .date-search {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
     border-radius: 8px;
+    font-size: 12px;
+    background: var(--bg);
+    margin-bottom: 8px;
+    outline: none;
+    transition: all 0.15s;
+  }
+  .date-search:focus { border-color: var(--primary); background: white; }
+  .tree-year {
+    font-size: 11px; font-weight: 700; color: var(--text-sub);
+    text-transform: uppercase; letter-spacing: 0.5px;
+    padding: 8px 4px 2px;
+  }
+  .tree-month {
+    padding: 8px 10px; cursor: pointer;
+    display: flex; align-items: center; gap: 6px;
+    border-radius: 6px; font-size: 13px; font-weight: 600;
+    user-select: none;
+  }
+  .tree-month:hover { background: var(--bg); }
+  .tree-arrow { font-size: 9px; color: var(--text-sub); width: 10px; }
+  .tree-count {
+    margin-left: auto; font-size: 10px; color: var(--text-sub); font-weight: 500;
+    background: var(--bg); padding: 2px 7px; border-radius: 10px; min-width: 22px; text-align: center;
+  }
+  .date-item.in-tree { padding-left: 24px; font-size: 13px; }
+  .date-item {
+    padding: 8px 12px;
+    border-radius: 6px;
     cursor: pointer;
-    font-size: 14px;
+    font-size: 13px;
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -381,6 +411,7 @@
 
     <div>
       <div class="date-list-title">📅 일자 (<span id="dateCount">0</span>)</div>
+      <input type="text" id="dateSearch" class="date-search" placeholder="🔍 검색 (예: 2026-01, 1월, 01-15)">
       <div class="date-list" id="dateList"></div>
     </div>
 
@@ -916,26 +947,83 @@ function parseList(wb) {
 // ================================================================
 function renderDateList() {
   const list = document.getElementById('dateList');
-  const dates = Object.keys(store).sort().reverse();
-  document.getElementById('dateCount').textContent = dates.length;
-  if (!dates.length) {
+  const allDates = Object.keys(store).sort().reverse();
+  document.getElementById('dateCount').textContent = allDates.length;
+  if (!allDates.length) {
     list.innerHTML = '<div style="font-size:12px;color:var(--text-sub);padding:12px;text-align:center;">업로드된 데이터 없음</div>';
     return;
   }
-  list.innerHTML = dates.map(d => {
-    const channels = Object.keys(store[d]);
-    const hasC = channels.includes('쿠팡');
-    const hasS = channels.includes('샵N');
-    return `
-      <div class="date-item ${currentDate === d ? 'active' : ''}" data-date="${d}">
-        <span>${formatDateDisplay(d)}</span>
-        <span class="badges">
-          <span class="badge ${hasC ? 'has' : ''}">쿠팡</span>
-          <span class="badge ${hasS ? 'has' : ''}">샵N</span>
-        </span>
-      </div>
-    `;
-  }).join('');
+
+  const search = (document.getElementById('dateSearch')?.value || '').trim().toLowerCase();
+  const matchesSearch = (d) => {
+    if (!search) return true;
+    const display = formatDateDisplay(d).toLowerCase();
+    const monthNum = parseInt(d.slice(5, 7));
+    const yearNum = parseInt(d.slice(0, 4));
+    return d.includes(search) || display.includes(search)
+        || `${monthNum}월`.includes(search) || `${yearNum}년`.includes(search);
+  };
+
+  const tree = {};
+  for (const d of allDates) {
+    if (!matchesSearch(d)) continue;
+    const year = d.slice(0, 4);
+    const month = d.slice(0, 7);
+    if (!tree[year]) tree[year] = {};
+    if (!tree[year][month]) tree[year][month] = [];
+    tree[year][month].push(d);
+  }
+
+  const expanded = JSON.parse(sessionStorage.getItem('expandedMonths') || '{}');
+  if (currentDate) expanded[currentDate.slice(0, 7)] = true;
+  const forceOpen = !!search;
+
+  let html = '';
+  const years = Object.keys(tree).sort().reverse();
+  if (!years.length) {
+    list.innerHTML = '<div style="font-size:12px;color:var(--text-sub);padding:12px;text-align:center;">검색 결과 없음</div>';
+    return;
+  }
+  for (const year of years) {
+    html += `<div class="tree-year">${year}년</div>`;
+    const months = Object.keys(tree[year]).sort().reverse();
+    for (const month of months) {
+      const monthDates = tree[year][month];
+      const monthNum = parseInt(month.slice(5, 7));
+      const isOpen = forceOpen || expanded[month];
+      html += `<div class="tree-month" data-month="${month}">
+        <span class="tree-arrow">${isOpen ? '▼' : '▶'}</span>
+        <span>${monthNum}월</span>
+        <span class="tree-count">${monthDates.length}</span>
+      </div>`;
+      if (isOpen) {
+        for (const d of monthDates) {
+          const channels = Object.keys(store[d]);
+          const hasC = channels.includes('쿠팡');
+          const hasS = channels.includes('샵N');
+          html += `
+            <div class="date-item in-tree ${currentDate === d ? 'active' : ''}" data-date="${d}">
+              <span>${formatDateDisplay(d)}</span>
+              <span class="badges">
+                <span class="badge ${hasC ? 'has' : ''}">쿠</span>
+                <span class="badge ${hasS ? 'has' : ''}">샵</span>
+              </span>
+            </div>`;
+        }
+      }
+    }
+  }
+  list.innerHTML = html;
+
+  list.querySelectorAll('.tree-month').forEach(el => {
+    el.addEventListener('click', () => {
+      const m = el.dataset.month;
+      const exp = JSON.parse(sessionStorage.getItem('expandedMonths') || '{}');
+      exp[m] = !exp[m];
+      sessionStorage.setItem('expandedMonths', JSON.stringify(exp));
+      renderDateList();
+    });
+  });
   list.querySelectorAll('.date-item').forEach(el => {
     el.addEventListener('click', () => {
       currentDate = el.dataset.date;
@@ -1884,6 +1972,16 @@ document.getElementById('btnClear').addEventListener('click', () => {
   render();
   showToast('모든 데이터가 삭제되었습니다');
 });
+
+// 검색 입력 이벤트
+const searchInput = document.getElementById('dateSearch');
+if (searchInput) {
+  let searchTimer;
+  searchInput.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => renderDateList(), 100);
+  });
+}
 
 // ================================================================
 // 시작
