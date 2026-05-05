@@ -705,9 +705,12 @@ function processSalesStatus(filename, wb) {
 
     if (!store[dateStr]) store[dateStr] = {};
     const existing = store[dateStr][group] || {};
+    const _now = new Date();
+    const _todayStr = `${_now.getFullYear()}-${String(_now.getMonth()+1).padStart(2,'0')}-${String(_now.getDate()).padStart(2,'0')}`;
     store[dateStr][group] = {
       upload_date: dateStr, channel: group,
       _source: '판매현황',
+      _collected_date: _todayStr,  // 수집일 = 사용자가 판매현황을 업로드한 날
       _channels_today: channelsToday,
       _products_today: productsToday,
       _products_by_channel: productsByChannel,
@@ -779,81 +782,69 @@ function changeBadge(curr, prev) {
 }
 
 // 판매현황 기반 데이터를 월간 집계해서 detail/daily_trend/products 를 자동 채움
+// 각 슬롯의 월간 누적은 "그 일자까지의 누적"만 합산 (조회 일자 이후의 데이터는 제외)
 function recomputeAggregates() {
-  // 월별 / 채널그룹별로 집계
-  const monthly = {};
-  for (const date of Object.keys(store)) {
+  const allDates = Object.keys(store).sort();
+  for (const date of allDates) {
     const month = date.slice(0, 7);
     for (const cg of Object.keys(store[date])) {
       const slot = store[date][cg];
       if (slot._source !== '판매현황') continue;
-      if (!monthly[month]) monthly[month] = {};
-      if (!monthly[month][cg]) monthly[month][cg] = {
+
+      // ── 월초 ~ 현재 일자(date)까지의 누적 집계 ──
+      const m = {
         channels: {}, products: {}, days: [],
-        productsByChannel: {},  // { channel: { name: {qty, revenue_amount, cost_amount} } }
-        daysByChannel: {},      // { channel: [{date, qty, revenue, cost, margin}] }
+        productsByChannel: {}, daysByChannel: {},
       };
-      const m = monthly[month][cg];
-      m.days.push({
-        date,
-        qty: slot._daily_total.qty,
-        revenue: slot._daily_total.amount,
-        sale: slot._daily_total.amount,
-        cost: slot._daily_total.cost,
-        margin: slot._daily_total.profit,
-      });
-      (slot._channels_today || []).forEach(c => {
-        if (!m.channels[c.channel]) m.channels[c.channel] = { channel: c.channel, qty: 0, amount: 0, profit: 0 };
-        m.channels[c.channel].qty += c.qty;
-        m.channels[c.channel].amount += c.amount;
-        m.channels[c.channel].profit += c.profit;
-        // 채널별 일별 추이
-        if (!m.daysByChannel[c.channel]) m.daysByChannel[c.channel] = [];
-        m.daysByChannel[c.channel].push({
-          date,
-          qty: c.qty,
-          revenue: c.amount,
-          sale: c.amount,
-          cost: c.amount - c.profit,
-          margin: c.profit,
+      for (const d2 of allDates) {
+        if (!d2.startsWith(month)) continue;
+        if (d2 > date) break;  // sorted 보장 → 이후는 모두 제외
+        const slot2 = store[d2] && store[d2][cg];
+        if (!slot2 || slot2._source !== '판매현황') continue;
+
+        m.days.push({
+          date: d2,
+          qty: slot2._daily_total.qty,
+          revenue: slot2._daily_total.amount,
+          sale: slot2._daily_total.amount,
+          cost: slot2._daily_total.cost,
+          margin: slot2._daily_total.profit,
         });
-      });
-      (slot._products_today || []).forEach(p => {
-        if (!m.products[p.name]) m.products[p.name] = { name: p.name, qty: 0, revenue_amount: 0, cost_amount: 0 };
-        m.products[p.name].qty += p.qty;
-        m.products[p.name].revenue_amount += p.revenue_amount;
-        m.products[p.name].cost_amount += p.cost_amount;
-      });
-      // 채널별 상품 누적
-      const pbc = slot._products_by_channel || {};
-      for (const ch of Object.keys(pbc)) {
-        if (!m.productsByChannel[ch]) m.productsByChannel[ch] = {};
-        for (const p of pbc[ch]) {
-          if (!m.productsByChannel[ch][p.name]) m.productsByChannel[ch][p.name] = { name: p.name, qty: 0, revenue_amount: 0, cost_amount: 0 };
-          m.productsByChannel[ch][p.name].qty += p.qty;
-          m.productsByChannel[ch][p.name].revenue_amount += p.revenue_amount;
-          m.productsByChannel[ch][p.name].cost_amount += p.cost_amount;
+        (slot2._channels_today || []).forEach(c => {
+          if (!m.channels[c.channel]) m.channels[c.channel] = { channel: c.channel, qty: 0, amount: 0, profit: 0 };
+          m.channels[c.channel].qty += c.qty;
+          m.channels[c.channel].amount += c.amount;
+          m.channels[c.channel].profit += c.profit;
+          if (!m.daysByChannel[c.channel]) m.daysByChannel[c.channel] = [];
+          m.daysByChannel[c.channel].push({
+            date: d2, qty: c.qty, revenue: c.amount, sale: c.amount,
+            cost: c.amount - c.profit, margin: c.profit,
+          });
+        });
+        (slot2._products_today || []).forEach(p => {
+          if (!m.products[p.name]) m.products[p.name] = { name: p.name, qty: 0, revenue_amount: 0, cost_amount: 0 };
+          m.products[p.name].qty += p.qty;
+          m.products[p.name].revenue_amount += p.revenue_amount;
+          m.products[p.name].cost_amount += p.cost_amount;
+        });
+        const pbc = slot2._products_by_channel || {};
+        for (const ch of Object.keys(pbc)) {
+          if (!m.productsByChannel[ch]) m.productsByChannel[ch] = {};
+          for (const p of pbc[ch]) {
+            if (!m.productsByChannel[ch][p.name]) m.productsByChannel[ch][p.name] = { name: p.name, qty: 0, revenue_amount: 0, cost_amount: 0 };
+            m.productsByChannel[ch][p.name].qty += p.qty;
+            m.productsByChannel[ch][p.name].revenue_amount += p.revenue_amount;
+            m.productsByChannel[ch][p.name].cost_amount += p.cost_amount;
+          }
         }
       }
-    }
-  }
 
-  // 각 판매현황 데이터에 합성된 detail/list 주입
-  for (const date of Object.keys(store)) {
-    const month = date.slice(0, 7);
-    for (const cg of Object.keys(store[date])) {
-      const slot = store[date][cg];
-      if (slot._source !== '판매현황') continue;
-      const m = monthly[month] && monthly[month][cg];
-      if (!m) continue;
-
+      // ── slot에 detail/list 주입 ──
       const monthly_revenue = Object.values(m.channels).reduce((s,c) => s + c.amount, 0);
-
       const [yy, mm] = month.split('-').map(Number);
       const totalDays = new Date(yy, mm, 0).getDate();
       const dayOfMonth = parseInt(date.slice(8, 10));
       const day_progress = dayOfMonth / totalDays;
-
       const goal_key = `goal_${cg}_${month}`;
       const goalRaw = localStorage.getItem(goal_key);
       const monthly_goal = goalRaw ? parseFloat(goalRaw) : null;
@@ -875,7 +866,6 @@ function recomputeAggregates() {
       };
       slot.daily_trend = [...m.days].sort((a,b) => a.date.localeCompare(b.date));
       slot.products = Object.values(m.products).sort((a,b) => b.revenue_amount - a.revenue_amount);
-      // 채널별 월간 집계 (사이트별 필터에 사용)
       slot._monthly_products_by_channel = {};
       for (const ch of Object.keys(m.productsByChannel)) {
         slot._monthly_products_by_channel[ch] = Object.values(m.productsByChannel[ch]).sort((a,b) => b.revenue_amount - a.revenue_amount);
@@ -2104,13 +2094,22 @@ function buildReportSheet(slot, cg, date) {
 
   const aoa = [];
   const blank = (cols) => Array(cols).fill(null);
-  const totalRows = Math.max(32, 4 + sortedProds.length + 2);
+  // 상품 합계 행 위치(1-indexed Excel row): lastProdRow = 4 + sortedProds.length
+  // 채널 표(종합 행) = lastProdRow + 27 (원본 보고서 양식 R286 매칭)
+  const _lastProdRow_pre = 4 + sortedProds.length;
+  const _chTotalRow_pre = _lastProdRow_pre + 27;
+  const totalRows = Math.max(32, _chTotalRow_pre + 1);
   for (let i = 0; i < totalRows; i++) aoa.push(blank(24));
 
   // 좌측 요약 정적 텍스트
   aoa[0][19] = '[ 수량 : ea / 단위 : 원(VAT포함) ]';
   aoa[1][1] = '일일 매출 보고서';
-  aoa[4][1] = date;
+  // B5: 수집일 = 사용자가 판매현황을 업로드한 날 (없으면 오늘)
+  const _collectedDate = slot._collected_date || (() => {
+    const _now = new Date();
+    return `${_now.getFullYear()}-${String(_now.getMonth()+1).padStart(2,'0')}-${String(_now.getDate()).padStart(2,'0')}`;
+  })();
+  aoa[4][1] = _collectedDate;
   aoa[7][1] = '라인업시스템㈜-랜스타';
   aoa[10][1] = ' 당월 목표 매출 A'; aoa[10][2] = d.monthly_goal || 0;
   aoa[12][1] = ' 일 목표 매출 B\n( A / F )';
@@ -2199,16 +2198,88 @@ function buildReportSheet(slot, cg, date) {
     setF(ws, `X${sumRow}`, `IFERROR(V${sumRow}/M${sumRow}-1,"")`, '');
   }
 
+  // ────────────── 보고서 하단: 입점몰 누적 표 ──────────────
+  // 행 위치 (Excel 1-indexed)
+  const chHeader1Row = sumRow + 2;       // 섹션 헤더 (전월 누적/당월 누적/일일결산)
+  const chHeader2Row = sumRow + 3;       // 컬럼 헤더 (입점몰/수량/납품가/마진/마진율)
+  const chDataStartRow = sumRow + 4;     // 데이터 시작
+  const CH_ROW_COUNT = 23;               // 원본 양식과 동일 (padding 포함)
+  const chTotalRow = chDataStartRow + CH_ROW_COUNT;  // 종합 행
+  // 채널 순서: GROUP_CHANNELS[cg] (없으면 슬롯의 monthly_channels 순서)
+  const _chOrder = (typeof GROUP_CHANNELS !== 'undefined' && GROUP_CHANNELS[cg])
+    ? [...GROUP_CHANNELS[cg]]
+    : ((slot.detail?.monthly_channels || []).map(c => c.channel));
+  // lookup 맵
+  const _prevChMap = (prevAgg && prevAgg.channels) || {};
+  const _monthlyChMap = {};
+  (slot.detail?.monthly_channels || []).forEach(c => _monthlyChMap[c.channel] = c);
+  const _dailyChMap = {};
+  (slot.detail?.daily_channels || []).forEach(c => _dailyChMap[c.channel] = c);
+
+  // 헤더 / 채널 라벨은 ws 셀 직접 쓰기 (aoa는 이미 변환된 시점)
+  const _setS = (ref, val) => {
+    ws[ref] = { t: 's', v: String(val) };
+    if (ws['!ref']) {
+      const range = XLSX.utils.decode_range(ws['!ref']);
+      const dec = XLSX.utils.decode_cell(ref);
+      if (dec.r > range.e.r) range.e.r = dec.r;
+      if (dec.c > range.e.c) range.e.c = dec.c;
+      ws['!ref'] = XLSX.utils.encode_range(range);
+    }
+  };
+  const _setN = (ref, val) => {
+    if (val === 0 || val == null) return;
+    ws[ref] = { t: 'n', v: val };
+    if (ws['!ref']) {
+      const range = XLSX.utils.decode_range(ws['!ref']);
+      const dec = XLSX.utils.decode_cell(ref);
+      if (dec.r > range.e.r) range.e.r = dec.r;
+      if (dec.c > range.e.c) range.e.c = dec.c;
+      ws['!ref'] = XLSX.utils.encode_range(range);
+    }
+  };
+  const _colLetter = (idx0) => XLSX.utils.encode_col(idx0);
+  // 섹션 헤더 (chHeader1Row): B=구분, C=전월 누적 매출, I=당월 누적 매출, O=일일결산
+  _setS(`B${chHeader1Row}`, '구분');
+  _setS(`C${chHeader1Row}`, '전월 누적 매출');
+  _setS(`I${chHeader1Row}`, '당월 누적 매출');
+  _setS(`O${chHeader1Row}`, '일일결산');
+  // 컬럼 헤더 (chHeader2Row)
+  _setS(`B${chHeader2Row}`, '입점몰');
+  _setS(`C${chHeader2Row}`, '수량');         _setS(`D${chHeader2Row}`, '납품가 매출');
+  _setS(`F${chHeader2Row}`, '마진');         _setS(`H${chHeader2Row}`, '마진율');
+  _setS(`I${chHeader2Row}`, '수량');         _setS(`J${chHeader2Row}`, '납품가 매출');
+  _setS(`L${chHeader2Row}`, '마진');         _setS(`N${chHeader2Row}`, '마진율');
+  _setS(`O${chHeader2Row}`, '수량');         _setS(`P${chHeader2Row}`, '납품가 매출');
+  _setS(`R${chHeader2Row}`, '마진');         _setS(`T${chHeader2Row}`, '마진율');
+  _setS(`V${chHeader2Row}`, '당월마감예상');
+  _setS(`W${chHeader2Row}`, '전월 vs 당월');
+  _setS(`X${chHeader2Row}`, '증감률');
+  // 입점몰 명 + 전월 누적 하드코딩 값
+  for (let i = 0; i < CH_ROW_COUNT; i++) {
+    const r = chDataStartRow + i;
+    const chName = _chOrder[i] || '';
+    if (!chName) continue;
+    _setS(`B${r}`, chName);
+    const prev = _prevChMap[chName] || { qty:0, amount:0, profit:0 };
+    _setN(`C${r}`, prev.qty);
+    _setN(`D${r}`, prev.amount);
+    _setN(`F${r}`, prev.profit);
+  }
+  // 종합 행 라벨
+  _setS(`B${chTotalRow}`, '종합');
+
+  // ─── (이하는 aoa → ws 변환 후 수식 입력 단계로 이동되어야 함) ───
   // 좌측 요약 수식
   // C13: 일 목표 = 당월 목표 / 총일수
   setF(ws, 'C13', 'C11/C25', (d.monthly_goal || 0) / totalDays);
-  // C15: 월 매출 = 합계행의 P (당월 매출 합)
+  // C15: 월 매출 = 채널 표 종합 J열 (당월 누적 납품가 합)
   if (sortedProds.length > 0) {
-    setF(ws, 'C15', `P${sumRow}`, d.monthly_revenue || 0);
-    setF(ws, 'C17', `S${sumRow}`, d.daily_revenue || 0);
-    setF(ws, 'C29', `V${sumRow}`, d.month_forecast || 0);
-    setF(ws, 'C30', `C29-M${sumRow}`, (d.month_forecast || 0) - (prevAgg.totalRevenue || 0));
-    setF(ws, 'C31', `IFERROR(C30/M${sumRow},"")`, prevAgg.totalRevenue > 0 ? (d.month_forecast - prevAgg.totalRevenue) / prevAgg.totalRevenue : '');
+    setF(ws, 'C15', `SUM(J${chTotalRow})`, d.monthly_revenue || 0);
+    setF(ws, 'C17', `SUM(P${chTotalRow})`, d.daily_revenue || 0);
+    setF(ws, 'C29', `V${chTotalRow}`, d.month_forecast || 0);
+    setF(ws, 'C30', `W${chTotalRow}`, (d.month_forecast || 0) - (prevAgg.totalRevenue || 0));
+    setF(ws, 'C31', `X${chTotalRow}`, prevAgg.totalRevenue > 0 ? (d.month_forecast - prevAgg.totalRevenue) / prevAgg.totalRevenue : '');
   } else {
     if ((d.monthly_revenue || 0) !== 0) ws['C15'] = { t:'n', v: d.monthly_revenue };
     if ((d.daily_revenue || 0) !== 0) ws['C17'] = { t:'n', v: d.daily_revenue };
@@ -2223,6 +2294,69 @@ function buildReportSheet(slot, cg, date) {
   // C21: 일 달성율 = 일 매출 / 일 목표
   setF(ws, 'C21', 'IFERROR(C17/C13,"")',
     (d.daily_goal || 0) > 0 ? (d.daily_revenue || 0) / d.daily_goal : '');
+
+  // ────────────── 채널 표 수식 입력 ──────────────
+  for (let i = 0; i < CH_ROW_COUNT; i++) {
+    const r = chDataStartRow + i;
+    const chName = _chOrder[i] || '';
+    if (!chName) continue;
+    const prev = _prevChMap[chName] || { qty:0, amount:0, profit:0 };
+    const m = _monthlyChMap[chName] || { qty:0, amount:0, profit:0 };
+    const dCh = _dailyChMap[chName] || { qty:0, amount:0, profit:0 };
+    // 전월 마진율 H = F/D
+    setF(ws, `H${r}`, `IFERROR(F${r}/D${r}, "")`, prev.amount > 0 ? prev.profit / prev.amount : '');
+    // 당월 누적 (당월 시트 VLOOKUP)
+    setF(ws, `I${r}`, `IFERROR(VLOOKUP(B${r},당월!$A$2:$D$71,2,FALSE), "")`, m.qty);
+    setF(ws, `J${r}`, `IFERROR(VLOOKUP(B${r},당월!$A$2:$D$71,3,FALSE), "")`, m.amount);
+    setF(ws, `L${r}`, `IFERROR(VLOOKUP(B${r},당월!$A$2:$D$71,4,FALSE), "")`, m.profit);
+    setF(ws, `N${r}`, `IFERROR(L${r}/J${r}, "")`, m.amount > 0 ? m.profit / m.amount : '');
+    // 일일 결산 (일일 시트 VLOOKUP)
+    setF(ws, `O${r}`, `IFERROR(VLOOKUP(B${r},일일!$A$2:$D$27,2,FALSE), "")`, dCh.qty);
+    setF(ws, `P${r}`, `IFERROR(VLOOKUP(B${r},일일!$A$2:$D$27,3,FALSE), "")`, dCh.amount);
+    setF(ws, `R${r}`, `IFERROR(VLOOKUP(B${r},일일!$A$2:$D$27,4,FALSE), "")`, dCh.profit);
+    setF(ws, `T${r}`, `IFERROR(R${r}/P${r}, "")`, dCh.amount > 0 ? dCh.profit / dCh.amount : '');
+    // 당월마감예상 V = (J/$C$24)*$C$25
+    const _forecast = dayOfMonth > 0 ? (m.amount / dayOfMonth) * totalDays : 0;
+    setF(ws, `V${r}`, `IFERROR((J${r}/$C$24)*$C$25, "")`, _forecast);
+    // 전월 vs 당월 차액 W = V - D
+    setF(ws, `W${r}`, `IFERROR(V${r}-D${r}, "")`, prev.amount > 0 ? _forecast - prev.amount : '');
+    // 증감률 X = V/D - 1
+    setF(ws, `X${r}`, `IFERROR(V${r}/D${r}-1, "")`, prev.amount > 0 ? _forecast / prev.amount - 1 : '');
+  }
+  // 채널 표 종합 행
+  const _r0 = chDataStartRow;
+  const _r1 = chDataStartRow + CH_ROW_COUNT - 1;
+  const _sumPrev = _chOrder.slice(0, CH_ROW_COUNT).reduce((acc, ch) => {
+    const p = _prevChMap[ch] || { qty:0, amount:0, profit:0 };
+    acc.qty += p.qty || 0; acc.amount += p.amount || 0; acc.profit += p.profit || 0;
+    return acc;
+  }, { qty:0, amount:0, profit:0 });
+  const _sumMonth = _chOrder.slice(0, CH_ROW_COUNT).reduce((acc, ch) => {
+    const m = _monthlyChMap[ch] || { qty:0, amount:0, profit:0 };
+    acc.qty += m.qty || 0; acc.amount += m.amount || 0; acc.profit += m.profit || 0;
+    return acc;
+  }, { qty:0, amount:0, profit:0 });
+  const _sumDay = _chOrder.slice(0, CH_ROW_COUNT).reduce((acc, ch) => {
+    const x = _dailyChMap[ch] || { qty:0, amount:0, profit:0 };
+    acc.qty += x.qty || 0; acc.amount += x.amount || 0; acc.profit += x.profit || 0;
+    return acc;
+  }, { qty:0, amount:0, profit:0 });
+  setF(ws, `C${chTotalRow}`, `SUM(C${_r0}:C${_r1})`, _sumPrev.qty);
+  setF(ws, `D${chTotalRow}`, `SUM(D${_r0}:D${_r1})`, _sumPrev.amount);
+  setF(ws, `F${chTotalRow}`, `SUM(F${_r0}:F${_r1})`, _sumPrev.profit);
+  setF(ws, `H${chTotalRow}`, `IFERROR(F${chTotalRow}/D${chTotalRow}, "")`, _sumPrev.amount > 0 ? _sumPrev.profit / _sumPrev.amount : '');
+  setF(ws, `I${chTotalRow}`, `SUM(I${_r0}:I${_r1})`, _sumMonth.qty);
+  setF(ws, `J${chTotalRow}`, `SUM(J${_r0}:J${_r1})`, _sumMonth.amount);
+  setF(ws, `L${chTotalRow}`, `SUM(L${_r0}:L${_r1})`, _sumMonth.profit);
+  setF(ws, `N${chTotalRow}`, `IFERROR(L${chTotalRow}/J${chTotalRow}, "")`, _sumMonth.amount > 0 ? _sumMonth.profit / _sumMonth.amount : '');
+  setF(ws, `O${chTotalRow}`, `SUM(O${_r0}:O${_r1})`, _sumDay.qty);
+  setF(ws, `P${chTotalRow}`, `SUM(P${_r0}:P${_r1})`, _sumDay.amount);
+  setF(ws, `R${chTotalRow}`, `SUM(R${_r0}:R${_r1})`, _sumDay.profit);
+  setF(ws, `T${chTotalRow}`, `IFERROR(R${chTotalRow}/P${chTotalRow}, "")`, _sumDay.amount > 0 ? _sumDay.profit / _sumDay.amount : '');
+  const _totalForecast = dayOfMonth > 0 ? (_sumMonth.amount / dayOfMonth) * totalDays : 0;
+  setF(ws, `V${chTotalRow}`, `SUM(V${_r0}:V${_r1})`, _totalForecast);
+  setF(ws, `W${chTotalRow}`, `SUM(W${_r0}:W${_r1})`, _sumPrev.amount > 0 ? _totalForecast - _sumPrev.amount : '');
+  setF(ws, `X${chTotalRow}`, `IFERROR(V${chTotalRow}/D${chTotalRow}-1, "")`, _sumPrev.amount > 0 ? _totalForecast / _sumPrev.amount - 1 : '');
 
   // 컬럼 너비
   ws['!cols'] = [
@@ -2240,10 +2374,17 @@ function buildReportSheet(slot, cg, date) {
   ['C19','E19','C21','C26','C31'].forEach(ref => {
     if (ws[ref] && typeof ws[ref].v === 'number') ws[ref].z = '0.0%';
   });
-  // X열 (증감률)
+  // X열 (증감률) - 상품 표
   for (let r = 4; r <= sumRow; r++) {
     const ref = `X${r}`;
     if (ws[ref] && typeof ws[ref].v === 'number') ws[ref].z = '0.0%';
+  }
+  // 채널 표의 마진율(H,N,T) 및 증감률(X) 백분율 포맷
+  for (let r = chDataStartRow; r <= chTotalRow; r++) {
+    ['H','N','T','X'].forEach(col => {
+      const ref = `${col}${r}`;
+      if (ws[ref] && typeof ws[ref].v === 'number') ws[ref].z = '0.0%';
+    });
   }
   return ws;
 }
