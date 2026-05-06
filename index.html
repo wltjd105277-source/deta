@@ -603,14 +603,12 @@ const GROUP_CHANNELS = {
 };
 
 // ─────────────── 배송비 그룹 (모델명 매칭) ───────────────
-// 적용 대상: 허브랙(소형 랙), 서버랙(대형 랙). 그 외는 모두 '로젠택배' 그룹.
+// 적용 대상: 허브랙(소형 랙), 서버랙(대형 랙)에만 자동 차감 적용.
 // ※ 자동 계산 (사용자 입력 없음):
-//   - 로젠택배: 트랜잭션 1건당 2150원 고정 차감
 //   - 허브랙/서버랙: 같은 전표의 DEL-매출배송료(택배비) 공급가액을
 //                  그 전표의 랙 라인 수로 나눠서 각 랙 라인에 분배 차감
-//   - 반품/할인/DEL- 트랜잭션은 차감 없음
-const LOZEN_FIXED_RATE = 2150;
-
+//   - 로젠택배(랙 외) / 반품 / 할인 / DEL- 트랜잭션은 차감 없음
+//     (ERP의 cost_unit이 이미 배송비를 반영함)
 const SHIPPING_GROUPS_PRESET = {
   '허브랙': [
     'LS-1000H', 'LS-1000HB',
@@ -667,22 +665,14 @@ function computeShippingMap(txns) {
       if ((l.qty || 0) < 0) return false;
       return isRackGroup(shippingGroupOf(l.model));
     });
-    // 일반 라인들 (로젠택배 - 2150 고정)
-    const normalLines = lines.filter(l => {
-      if (String(l.item_code || '').startsWith('DEL-')) return false;
-      if (/판매장려금/.test(String(l.group_name || ''))) return false;
-      if ((l.qty || 0) < 0) return false;
-      return !isRackGroup(shippingGroupOf(l.model));
-    });
-    // 랙 라인에 DEL-amount 균등 분배
+    // 랙 라인에 DEL-amount 균등 분배 (랙만 적용)
     if (rackLines.length > 0 && delSum > 0) {
       const per = delSum / rackLines.length;
       rackLines.forEach(l => map.set(l, per));
     } else {
       rackLines.forEach(l => map.set(l, 0));
     }
-    // 로젠택배 라인은 고정 2150원
-    normalLines.forEach(l => map.set(l, LOZEN_FIXED_RATE));
+    // 로젠택배(랙 외) 라인은 차감 없음 (ERP의 cost_unit이 이미 처리)
   }
   return map;
 }
@@ -1500,7 +1490,7 @@ function render() {
         return `전월 ${fmt.shortWon(prevTotal)} → <span style="color:${color};font-weight:600;">${diff >= 0 ? '+' : ''}${fmt.shortWon(diff)} (${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%)</span>`;
       })()}</div>
         <div class="kpi-card">
-      <div class="label">월 배송비 차감 마진 <span style="font-size:11px;color:var(--text-sub);font-weight:500;margin-left:6px;">자동 계산 (랙: 매출배송료 매칭, 그 외: 2,150원/건)</span></div>
+      <div class="label">월 배송비 차감 마진 <span style="font-size:11px;color:var(--text-sub);font-weight:500;margin-left:6px;">자동 계산 (허브랙/서버랙만 - DEL-매출배송료 분배)</span></div>
       <div class="value">${fmt.shortWon(_netMargin_month)}</div>
       <div class="sub">일 ${fmt.shortWon(_netMargin_today)}</div>
     </div>
@@ -1544,21 +1534,13 @@ function render() {
             <td style="padding:8px 10px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;">${fmt.won(_shipToday['서버랙'].sum)}</td>
             <td style="padding:8px 10px;border:1px solid var(--border);font-size:11px;color:var(--text-sub);">LS-1200H ~ LS-2000H 시리즈 — 균등 분배</td>
           </tr>
-          <tr>
-            <td style="padding:8px 10px;border:1px solid var(--border);"><strong>로젠택배</strong></td>
-            <td style="padding:8px 10px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;">${_shipMonth['로젠택배'].count.toLocaleString()}건</td>
-            <td style="padding:8px 10px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;">${fmt.won(_shipMonth['로젠택배'].sum)}</td>
-            <td style="padding:8px 10px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;">${_shipToday['로젠택배'].count.toLocaleString()}건</td>
-            <td style="padding:8px 10px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;">${fmt.won(_shipToday['로젠택배'].sum)}</td>
-            <td style="padding:8px 10px;border:1px solid var(--border);font-size:11px;color:var(--text-sub);">랙 외 모든 모델 — 1건당 2,150원 고정</td>
-          </tr>
           <tr style="background:var(--bg-sub);font-weight:600;">
-            <td style="padding:8px 10px;border:1px solid var(--border);">합계</td>
-            <td style="padding:8px 10px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;">${(_shipMonth['허브랙'].count + _shipMonth['서버랙'].count + _shipMonth['로젠택배'].count).toLocaleString()}건</td>
-            <td style="padding:8px 10px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;">${fmt.won(_shipMonth['허브랙'].sum + _shipMonth['서버랙'].sum + _shipMonth['로젠택배'].sum)}</td>
-            <td style="padding:8px 10px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;">${(_shipToday['허브랙'].count + _shipToday['서버랙'].count + _shipToday['로젠택배'].count).toLocaleString()}건</td>
-            <td style="padding:8px 10px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;">${fmt.won(_shipToday['허브랙'].sum + _shipToday['서버랙'].sum + _shipToday['로젠택배'].sum)}</td>
-            <td style="padding:8px 10px;border:1px solid var(--border);font-size:11px;color:var(--text-sub);">총 배송비 차감액</td>
+            <td style="padding:8px 10px;border:1px solid var(--border);">합계 (랙)</td>
+            <td style="padding:8px 10px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;">${(_shipMonth['허브랙'].count + _shipMonth['서버랙'].count).toLocaleString()}건</td>
+            <td style="padding:8px 10px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;">${fmt.won(_shipMonth['허브랙'].sum + _shipMonth['서버랙'].sum)}</td>
+            <td style="padding:8px 10px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;">${(_shipToday['허브랙'].count + _shipToday['서버랙'].count).toLocaleString()}건</td>
+            <td style="padding:8px 10px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;">${fmt.won(_shipToday['허브랙'].sum + _shipToday['서버랙'].sum)}</td>
+            <td style="padding:8px 10px;border:1px solid var(--border);font-size:11px;color:var(--text-sub);">허브랙+서버랙 차감액 (로젠택배는 ERP에서 처리)</td>
           </tr>
           <tr>
             <td style="padding:8px 10px;border:1px solid var(--border);font-size:12px;color:var(--text-sub);">참고: DEL-매출배송료</td>
@@ -2886,10 +2868,12 @@ function buildListSheet(slot, currentDate) {
       const cost = (t.cost_unit || 0) * qty;
       const margin = amount - cost;
       const unitPrice = qty !== 0 ? amount / qty : 0;
-      // 배송비 차감 마진 (자동 계산: shippingMap 활용)
-      const shipGrp = (category === '주문') ? shippingGroupOf(t.model) : '';
-      const shipRate = (category === '주문') ? (shippingMap.get(t) || 0) : 0;
-      const netMargin = (category === '주문') ? margin - shipRate : margin;
+      // 배송비 차감 마진 (허브랙/서버랙에만 적용)
+      const _grpRaw = shippingGroupOf(t.model);
+      const _isRackOrder = (category === '주문') && isRackGroup(_grpRaw);
+      const shipGrp = _isRackOrder ? _grpRaw : '';
+      const shipRate = _isRackOrder ? (shippingMap.get(t) || 0) : 0;
+      const netMargin = _isRackOrder ? margin - shipRate : margin;
       aoa.push([
         null, monthYY, null, d, ch,
         t.desc || '', t.model || '',
