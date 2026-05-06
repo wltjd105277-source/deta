@@ -670,29 +670,39 @@ function shippingDelInfoOf(t) {
 function isShippingFeeTxn(t) {
   const code = String(t.item_code || '');
   if (!code.startsWith('DEL-')) return false;
-  if (SHIPPING_DEL_MAP[code]) return true;
-  // 폴백: group_name 기반
+  if (getShippingDelMap()[code]) return true;
+  // 코드 prefix로 판별 (매출배/택배/배송)
+  if (code.includes('매출배') || code.includes('택배') || code.includes('배송')) return true;
+  // group_name/desc 폴백
   const grp = String(t.group_name || '');
-  return /매출배송료|택배비|택배/.test(grp) || code.includes('매출배') || code.includes('택배');
+  const desc = String(t.desc || '');
+  return /매출배송료|택배비|택배|배송료/.test(grp) || /택배|배송료/.test(desc);
 }
 
 // 일반(로젠) 택배 DEL-
+//   매핑에 있으면 매핑 따름 (group === '로젠택배')
+//   매핑에 없으면 desc에 '로젠택배' 명시되어 있거나, 랙 키워드 없는 모든 DEL- 배송료
 function isLozenShippingFeeTxn(t) {
   const info = shippingDelInfoOf(t);
   if (info) return info.group === '로젠택배';
-  // 폴백: desc 키워드
   if (!isShippingFeeTxn(t)) return false;
-  return /로젠택배/.test(String(t.desc || ''));
+  const desc = String(t.desc || '');
+  if (/로젠택배/.test(desc)) return true;
+  // 허브랙/서버랙/경동/매출배송료 키워드가 desc에 전혀 없으면 → 기본 로젠택배
+  if (!/매출\s*배송료|허브랙|서버랙|경동/.test(desc)) return true;
+  return false;
 }
 
 // 랙 전용 배송료 DEL-
+//   매핑에 있으면 매핑 따름
+//   매핑에 없으면 desc에 명확한 키워드 '경동/허브랙/서버랙' 있을 때만 랙으로
+//   ('매출 배송료' 단독은 너무 광범위 - 일반 로젠도 매출 배송료로 표시될 수 있음)
 function isRackShippingFeeTxn(t) {
   const info = shippingDelInfoOf(t);
   if (info) return info.group === '허브랙' || info.group === '서버랙';
-  // 폴백: desc 키워드 (단 로젠 아닌)
   if (!isShippingFeeTxn(t)) return false;
   if (isLozenShippingFeeTxn(t)) return false;
-  return /매출\s*배송료|허브랙/.test(String(t.desc || ''));
+  return /허브랙|서버랙|경동/.test(String(t.desc || ''));
 }
 
 // 셀러 부담 배송비 추출
