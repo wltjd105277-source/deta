@@ -1434,7 +1434,7 @@ function render() {
         return `전월 ${fmt.shortWon(prevTotal)} → <span style="color:${color};font-weight:600;">${diff >= 0 ? '+' : ''}${fmt.shortWon(diff)} (${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%)</span>`;
       })()}</div>
         <div class="kpi-card">
-      <div class="label">월 배송비 차감 마진 <span style="font-size:11px;color:var(--text-sub);font-weight:500;margin-left:6px;">단가는 🚚 패널에서 입력</span></div>
+      <div class="label">월 배송비 차감 마진 <span style="font-size:11px;color:var(--text-sub);font-weight:500;margin-left:6px;">자동 계산 (랙: 매출배송료 매칭, 그 외: 2,150원/건)</span></div>
       <div class="value">${fmt.shortWon(_netMargin_month)}</div>
       <div class="sub">일 ${fmt.shortWon(_netMargin_today)}</div>
     </div>
