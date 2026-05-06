@@ -604,8 +604,13 @@ const GROUP_CHANNELS = {
 
 // ─────────────── 배송비 그룹 (모델명 매칭) ───────────────
 // 적용 대상: 허브랙(소형 랙), 서버랙(대형 랙). 그 외는 모두 '로젠택배' 그룹.
-// 단가는 사이트에서 입력 → localStorage(`shipping_<group>`)에 저장.
-// 마진 = 공급가 − 입고단가×수량 − 해당 배송비(트랜잭션 1건당 1회 차감)
+// ※ 자동 계산 (사용자 입력 없음):
+//   - 로젠택배: 트랜잭션 1건당 2150원 고정 차감
+//   - 허브랙/서버랙: 같은 전표의 DEL-매출배송료(택배비) 공급가액을
+//                  그 전표의 랙 라인 수로 나눠서 각 랙 라인에 분배 차감
+//   - 반품/할인/DEL- 트랜잭션은 차감 없음
+const LOZEN_FIXED_RATE = 2150;
+
 const SHIPPING_GROUPS_PRESET = {
   '허브랙': [
     'LS-1000H', 'LS-1000HB',
@@ -618,7 +623,6 @@ const SHIPPING_GROUPS_PRESET = {
   ],
   // (그 외 모든 모델 = '로젠택배')
 };
-const SHIPPING_GROUP_KEYS = ['허브랙', '서버랙', '로젠택배'];
 
 function shippingGroupOf(modelName) {
   const m = String(modelName || '').trim();
@@ -629,29 +633,77 @@ function shippingGroupOf(modelName) {
   return '로젠택배';
 }
 
-function shippingRateOf(group) {
-  const v = localStorage.getItem(`shipping_${group}`);
-  const n = v ? parseFloat(v) : 0;
-  return Number.isFinite(n) ? n : 0;
+function isRackGroup(g) { return g === '허브랙' || g === '서버랙'; }
+
+// DEL-매출배송료(택배비) 트랜잭션인지 판별
+function isShippingFeeTxn(t) {
+  const code = String(t.item_code || '');
+  if (!code.startsWith('DEL-')) return false;
+  const grp = String(t.group_name || '');
+  return /매출배송료|택배비/.test(grp) || code.includes('매출배');
+}
+
+// 한 슬롯(_transactions)에 대해 트랜잭션별 배송비를 사전 계산해서 캐시.
+//   key: txn (object identity), value: shipping cost (원)
+// 같은 전표(txn_id+shop)의 DEL- 합계를 랙 라인 수로 나눠 분배.
+function computeShippingMap(txns) {
+  const map = new WeakMap();
+  if (!txns || !txns.length) return map;
+  // 전표 그룹화: key = `${shop}__${txn_id}`
+  const byTicket = {};
+  txns.forEach(t => {
+    const key = `${t.shop || ''}__${t.txn_id || ''}`;
+    if (!byTicket[key]) byTicket[key] = [];
+    byTicket[key].push(t);
+  });
+  for (const key of Object.keys(byTicket)) {
+    const lines = byTicket[key];
+    // 같은 전표의 DEL-매출배송료 합계
+    const delSum = lines.filter(isShippingFeeTxn).reduce((s, l) => s + (l.amount || 0), 0);
+    // 랙 라인들 (반품/0수량 제외)
+    const rackLines = lines.filter(l => {
+      if (String(l.item_code || '').startsWith('DEL-')) return false;
+      if (/판매장려금/.test(String(l.group_name || ''))) return false;
+      if ((l.qty || 0) < 0) return false;
+      return isRackGroup(shippingGroupOf(l.model));
+    });
+    // 일반 라인들 (로젠택배 - 2150 고정)
+    const normalLines = lines.filter(l => {
+      if (String(l.item_code || '').startsWith('DEL-')) return false;
+      if (/판매장려금/.test(String(l.group_name || ''))) return false;
+      if ((l.qty || 0) < 0) return false;
+      return !isRackGroup(shippingGroupOf(l.model));
+    });
+    // 랙 라인에 DEL-amount 균등 분배
+    if (rackLines.length > 0 && delSum > 0) {
+      const per = delSum / rackLines.length;
+      rackLines.forEach(l => map.set(l, per));
+    } else {
+      rackLines.forEach(l => map.set(l, 0));
+    }
+    // 로젠택배 라인은 고정 2150원
+    normalLines.forEach(l => map.set(l, LOZEN_FIXED_RATE));
+  }
+  return map;
 }
 
 // 트랜잭션 1건의 "배송비 차감 마진"
-//  - 주문(일반 판매)에만 배송비를 1회 차감
-//  - 반품/할인/배송비 자체 트랜잭션은 그대로 마진 사용
-function txnNetMargin(t) {
+function txnNetMargin(t, shippingMap) {
   const margin = (t.amount || 0) - (t.cost_unit || 0) * (t.qty || 0);
   const code = String(t.item_code || '');
   const grp = String(t.group_name || '');
   if (code.startsWith('DEL-')) return margin;
   if (/판매장려금/.test(grp)) return margin;
   if ((t.qty || 0) < 0) return margin;
-  return margin - shippingRateOf(shippingGroupOf(t.model));
+  const ship = (shippingMap && shippingMap.get(t)) || 0;
+  return margin - ship;
 }
 
 // 슬롯의 트랜잭션 전체에 대한 일/월 net margin 합산
 function computeNetMargin(slot) {
   const txns = slot._transactions || [];
-  return txns.reduce((sum, t) => sum + txnNetMargin(t), 0);
+  const map = computeShippingMap(txns);
+  return txns.reduce((sum, t) => sum + txnNetMargin(t, map), 0);
 }
 function computeMonthNetMargin(currentDate, cg) {
   const month = currentDate.slice(0, 7);
@@ -660,7 +712,8 @@ function computeMonthNetMargin(currentDate, cg) {
     if (!d.startsWith(month) || d > currentDate) continue;
     const s = store[d] && store[d][cg];
     if (!s || !s._transactions) continue;
-    s._transactions.forEach(t => total += txnNetMargin(t));
+    const map = computeShippingMap(s._transactions);
+    s._transactions.forEach(t => total += txnNetMargin(t, map));
   }
   return total;
 }
@@ -686,10 +739,11 @@ function processSalesStatus(filename, wb) {
     const f = String(r[0]);
     if (f.includes('계') || f.includes('합계') || f.includes('오전') || f.includes('오후')) continue;
 
-    // 첫 컬럼에서 날짜 추출: "2026/01/15-23" 또는 "2026-01-15"
-    const dm = f.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+    // 첫 컬럼에서 날짜 + 전표번호 추출: "2026/01/15-23"
+    const dm = f.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})(?:-(\d+))?/);
     if (!dm) continue;
     const dateStr = `${dm[1]}-${dm[2].padStart(2,'0')}-${dm[3].padStart(2,'0')}`;
+    const txnId = dm[4] || '';  // 전표번호 (없으면 빈 문자열)
 
     let model = r[4] || '';
     // 모델명이 비어있으면 품명 끝의 [모델코드] 패턴에서 자동 추출
@@ -699,6 +753,7 @@ function processSalesStatus(filename, wb) {
     }
     if (!txnsByDate[dateStr]) txnsByDate[dateStr] = [];
     txnsByDate[dateStr].push({
+      txn_id: txnId,        // 전표번호 - 같은 주문의 DEL-와 매칭용
       item_code: r[1] || '',
       shop: r[2] || '',
       desc: r[3] || '',
@@ -1335,25 +1390,7 @@ function render() {
       </details>`;
     }
 
-    // ─── 배송비 단가 입력 패널 ───
-    html += `<details class="panel" style="margin-bottom:16px;padding:0;" id="shippingPanel">
-      <summary style="padding:14px 18px;cursor:pointer;font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px;list-style:none;">
-        🚚 배송비 단가 (배송비 차감 마진 계산용) <span style="font-size:11px;color:var(--text-sub);font-weight:500;">(클릭해서 펼치기)</span>
-      </summary>
-      <div style="padding:0 18px 16px;display:flex;flex-wrap:wrap;gap:14px;align-items:center;border-top:1px solid var(--border);">
-        ${SHIPPING_GROUP_KEYS.map(g => {
-          const k = `shipping_${g}`;
-          const v = localStorage.getItem(k) || '';
-          return `<div style="display:flex;align-items:center;gap:6px;margin-top:10px;">
-            <span class="badge-ch other" style="white-space:nowrap;">${g}</span>
-            <input type="number" data-shipping-key="${k}" value="${v}" placeholder="0"
-              style="width:110px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-variant-numeric:tabular-nums;">
-            <span style="font-size:11px;color:var(--text-sub);">원/건</span>
-          </div>`;
-        }).join('')}
-        <span style="font-size:11px;color:var(--text-sub);margin-top:10px;">엔터로 저장 → KPI/매출리스트에 반영. 트랜잭션 1건당 1회 차감.</span>
-      </div>
-    </details>`;
+    // (배송비는 자동 계산됨: 로젠택배 2150원 고정, 랙은 DEL-매출배송료 트랜잭션 매칭)
   }
 
   // KPI 카드 - 배송비 차감 마진 (그룹별 합산)
@@ -2118,17 +2155,6 @@ document.body.addEventListener('change', e => {
     showToast('광고비를 저장했습니다', 'success');
     return;
   }
-  // 배송비 단가 입력
-  const shipInp = e.target.closest('input[data-shipping-key]');
-  if (shipInp) {
-    const k = shipInp.dataset.shippingKey;
-    const v = shipInp.value;
-    if (v === '' || v === '0') localStorage.removeItem(k);
-    else localStorage.setItem(k, v);
-    render();
-    showToast('배송비 단가를 저장했습니다', 'success');
-    return;
-  }
 });
 document.body.addEventListener('keydown', e => {
   const inp = e.target.closest('input[data-goal-key]');
@@ -2700,6 +2726,7 @@ function buildListSheet(slot, currentDate) {
     if (!d.startsWith(month)) continue;
     const s = store[d][cg];
     if (!s || !s._transactions) continue;
+    const shippingMap = computeShippingMap(s._transactions);
     s._transactions.forEach(t => {
       const ch = channelMap(t.shop);
       const itemCode = String(t.item_code || '');
@@ -2715,9 +2742,9 @@ function buildListSheet(slot, currentDate) {
       const cost = (t.cost_unit || 0) * qty;
       const margin = amount - cost;
       const unitPrice = qty !== 0 ? amount / qty : 0;
-      // 배송비 차감 마진 (주문에만 적용)
+      // 배송비 차감 마진 (자동 계산: shippingMap 활용)
       const shipGrp = (category === '주문') ? shippingGroupOf(t.model) : '';
-      const shipRate = shipGrp ? shippingRateOf(shipGrp) : 0;
+      const shipRate = (category === '주문') ? (shippingMap.get(t) || 0) : 0;
       const netMargin = (category === '주문') ? margin - shipRate : margin;
       aoa.push([
         null, monthYY, null, d, ch,
