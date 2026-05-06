@@ -2239,11 +2239,20 @@ function buildReportSheet(slot, cg, date) {
     }
   };
   const _colLetter = (idx0) => XLSX.utils.encode_col(idx0);
-  // 섹션 헤더 (chHeader1Row): B=구분, C=전월 누적 매출, I=당월 누적 매출, O=일일결산
+  // 섹션 헤더 (chHeader1Row): B=구분, C-H=전월 누적 매출, I-N=당월 누적 매출, O-T=일일결산
   _setS(`B${chHeader1Row}`, '구분');
   _setS(`C${chHeader1Row}`, '전월 누적 매출');
   _setS(`I${chHeader1Row}`, '당월 누적 매출');
   _setS(`O${chHeader1Row}`, '일일결산');
+  // 섹션 헤더 셀 병합
+  ws['!merges'] = ws['!merges'] || [];
+  ws['!merges'].push({ s:{r:chHeader1Row-1, c:2}, e:{r:chHeader1Row-1, c:7} });   // C-H 전월
+  ws['!merges'].push({ s:{r:chHeader1Row-1, c:8}, e:{r:chHeader1Row-1, c:13} });  // I-N 당월
+  ws['!merges'].push({ s:{r:chHeader1Row-1, c:14}, e:{r:chHeader1Row-1, c:19} }); // O-T 일일
+  // 행 높이: 헤더 두 줄을 적절히 보이게 설정
+  ws['!rows'] = ws['!rows'] || [];
+  ws['!rows'][chHeader1Row-1] = { hpt: 22 };
+  ws['!rows'][chHeader2Row-1] = { hpt: 28 };
   // 컬럼 헤더 (chHeader2Row)
   _setS(`B${chHeader2Row}`, '입점몰');
   _setS(`C${chHeader2Row}`, '수량');         _setS(`D${chHeader2Row}`, '납품가 매출');
@@ -2358,13 +2367,13 @@ function buildReportSheet(slot, cg, date) {
   setF(ws, `W${chTotalRow}`, `SUM(W${_r0}:W${_r1})`, _sumPrev.amount > 0 ? _totalForecast - _sumPrev.amount : '');
   setF(ws, `X${chTotalRow}`, `IFERROR(V${chTotalRow}/D${chTotalRow}-1, "")`, _sumPrev.amount > 0 ? _totalForecast / _sumPrev.amount - 1 : '');
 
-  // 컬럼 너비
+  // 컬럼 너비 (상품 표 + 채널 표 양쪽에 맞춤)
   ws['!cols'] = [
-    {wch:2},{wch:22},{wch:14},{wch:2},{wch:10},{wch:2},{wch:2},{wch:2},
-    {wch:22},{wch:2},{wch:2},
+    {wch:2},{wch:22},{wch:14},{wch:14},{wch:10},{wch:14},{wch:2},{wch:6},
+    {wch:22},{wch:14},{wch:2},
+    {wch:14},{wch:14},{wch:6},
     {wch:8},{wch:14},{wch:2},
-    {wch:8},{wch:14},{wch:2},
-    {wch:8},{wch:14},{wch:2},{wch:2},
+    {wch:14},{wch:14},{wch:6},{wch:2},
     {wch:14},{wch:14},{wch:10}
   ];
   // 백분율 컬럼: E19, C19, C21, C26, X{*}
