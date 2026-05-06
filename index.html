@@ -730,10 +730,13 @@ function computeShippingMap(txns) {
     return isRackGroup(shippingGroupOf(l.model));
   });
 
+  // 모델명 정규화 (공백 trim, 대문자 통일)
+  const _norm = m => String(m || '').trim().toUpperCase();
   txns.filter(isRackShippingFeeTxn).forEach(rd => {
     const info = shippingDelInfoOf(rd);
     if (!info || !info.models || info.models.length === 0) return;
-    const matchModel = (l) => info.models.includes(l.model || '');
+    const _normMapped = info.models.map(_norm);
+    const matchModel = (l) => _normMapped.includes(_norm(l.model));
     // 1순위: 같은 쇼핑몰
     let targets = allRackProductLines.filter(l =>
       (l.shop || '') === (rd.shop || '') && matchModel(l));
@@ -754,15 +757,34 @@ function computeShippingMap(txns) {
 }
 
 // 월 전체 트랜잭션을 합쳐서 매칭 (다른 일자의 매핑 모델까지 대상)
-//   currentDate까지의 (currentDate 포함) 같은 cg의 모든 트랜잭션 통합
+//   1차: 같은 cg의 월 전체
+//   2차 폴백: 다른 cg까지 합쳐서 매칭 시도 (cg 분리된 ERP 케이스 대비)
 function computeMonthShippingMap(currentDate, cg) {
   const month = currentDate.slice(0, 7);
-  const allTxns = [];
+  const sameTxns = [];
   Object.keys(store).filter(d => d.startsWith(month) && d <= currentDate).sort().forEach(d => {
     const slot = store[d] && store[d][cg];
-    if (slot && slot._transactions) allTxns.push(...slot._transactions);
+    if (slot && slot._transactions) sameTxns.push(...slot._transactions);
   });
-  return computeShippingMap(allTxns);
+  const map = computeShippingMap(sameTxns);
+  // 2차: 매칭 실패한 DEL이 있으면 다른 cg까지 합쳐서 다시 매칭
+  const unmatchedDels = sameTxns.filter(t => isRackShippingFeeTxn(t) && !map.has(t));
+  if (unmatchedDels.length > 0) {
+    const allTxns = [...sameTxns];
+    Object.keys(store).filter(d => d.startsWith(month) && d <= currentDate).forEach(d => {
+      const slotMap = store[d] || {};
+      Object.keys(slotMap).forEach(otherCg => {
+        if (otherCg === cg) return;
+        const slot = slotMap[otherCg];
+        if (slot && slot._transactions) allTxns.push(...slot._transactions);
+      });
+    });
+    const map2 = computeShippingMap(allTxns);
+    sameTxns.forEach(t => {
+      if (!map.has(t) && map2.has(t)) map.set(t, map2.get(t));
+    });
+  }
+  return map;
 }
 
 // 트랜잭션 1건의 "배송비 차감 마진"
@@ -831,17 +853,43 @@ function computeShippingBreakdown(currentDate, viewChannels, scope) {
         });
         return ml;
       })();
+      const allMonthRackLines = (() => {
+        const ml = [];
+        Object.keys(store).filter(dd => dd.startsWith(month) && dd <= currentDate).forEach(dd => {
+          const slotMap = store[dd] || {};
+          Object.keys(slotMap).forEach(c2 => {
+            const sl = slotMap[c2];
+            if (!sl || !sl._transactions) return;
+            sl._transactions.forEach(l => {
+              if (String(l.item_code || '').startsWith('DEL-')) return;
+              if (/판매장려금/.test(String(l.group_name || ''))) return;
+              if ((l.qty || 0) < 0) return;
+              if (isRackGroup(shippingGroupOf(l.model))) ml.push(l);
+            });
+          });
+        });
+        return ml;
+      })();
+      const _norm2 = m => String(m || '').trim().toUpperCase();
       allRackDels.forEach(rd => {
         const info = shippingDelInfoOf(rd);
         const cost = extractRackShippingCost(rd);
         result.del.count += 1;
         result.del.sum += cost;
         let matched = false;
+        let reason = '매핑정보없음';
         if (info && info.models && info.models.length > 0) {
-          const matchM = l => info.models.includes(l.model || '');
+          const normMapped = info.models.map(_norm2);
+          const matchM = l => normMapped.includes(_norm2(l.model));
           let t1 = monthRackLines.filter(l => (l.shop || '') === (rd.shop || '') && matchM(l));
           let t2 = (t1.length === 0) ? monthRackLines.filter(matchM) : t1;
-          matched = t2.length > 0;
+          let t3 = (t2.length === 0) ? allMonthRackLines.filter(matchM) : t2;
+          matched = t3.length > 0;
+          if (!matched) reason = '매핑모델(' + info.models.join('/') + ')이 이 월에 없음';
+          else if (t1.length === 0 && t2.length > 0) reason = '같은 쇼핑몰엔 없음(2차폴백)';
+          else if (t2.length === 0 && t3.length > 0) reason = '같은 cg엔 없음(3차폴백)';
+        } else {
+          reason = '품목코드 ' + (rd.item_code || '?') + ' 매핑에 없음 - 매핑 xlsx 확인 필요';
         }
         if (!matched) {
           result.unmatched.count += 1;
@@ -853,6 +901,8 @@ function computeShippingBreakdown(currentDate, viewChannels, scope) {
             desc: rd.desc || '',
             cost,
             cg,
+            reason,
+            itemCode: rd.item_code || '',
           });
         }
       });
@@ -1714,7 +1764,14 @@ function render() {
   html += `<details class="panel" style="margin-bottom:16px;padding:0;" id="shippingBreakdownPanel">
     <summary style="padding:14px 18px;cursor:pointer;font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px;list-style:none;">
       🚚 배송비 내역 (자동 계산 검증)
-      <span style="font-size:11px;color:var(--text-sub);font-weight:500;">(클릭해서 펼치기 — 그룹별 트랜잭션 수와 배송비 총액 확인)</span>
+      <span style="font-size:11px;color:var(--text-sub);font-weight:500;">(클릭해서 펼치기)</span>
+      ${(() => {
+        const userMap = localStorage.getItem('shipping_del_map_user');
+        if (userMap) {
+          try { const c = Object.keys(JSON.parse(userMap)).length; return `<span style="margin-left:auto;padding:2px 8px;background:var(--success);color:white;border-radius:4px;font-size:10px;">사용자 매핑 ${c}개 로드됨</span>`; } catch(e) {}
+        }
+        return `<span style="margin-left:auto;padding:2px 8px;background:#e0e7ff;color:#4338ca;border-radius:4px;font-size:10px;">기본 매핑 ${Object.keys(SHIPPING_DEL_MAP).length}개 사용중</span>`;
+      })()}
     </summary>
     <div style="padding:14px 18px 18px;border-top:1px solid var(--border);overflow-x:auto;">
       <table style="width:100%;border-collapse:collapse;font-size:13px;">
@@ -1792,9 +1849,10 @@ function render() {
                 <tr style="background:var(--bg-sub);">
                   <th style="padding:6px 8px;border:1px solid var(--border);text-align:left;">발주일</th>
                   <th style="padding:6px 8px;border:1px solid var(--border);text-align:left;">쇼핑몰</th>
-                  <th style="padding:6px 8px;border:1px solid var(--border);text-align:left;">전표</th>
+                  <th style="padding:6px 8px;border:1px solid var(--border);text-align:left;">품목코드</th>
                   <th style="padding:6px 8px;border:1px solid var(--border);text-align:left;">품명</th>
                   <th style="padding:6px 8px;border:1px solid var(--border);text-align:right;">추출 배송비</th>
+                  <th style="padding:6px 8px;border:1px solid var(--border);text-align:left;">실패 이유</th>
                 </tr>
               </thead>
               <tbody>
@@ -1804,9 +1862,10 @@ function render() {
                   <tr>
                     <td style="padding:6px 8px;border:1px solid var(--border);font-variant-numeric:tabular-nums;">${u.date}</td>
                     <td style="padding:6px 8px;border:1px solid var(--border);">${u.shop}</td>
-                    <td style="padding:6px 8px;border:1px solid var(--border);font-variant-numeric:tabular-nums;color:var(--text-sub);">${u.txn_id || '-'}</td>
+                    <td style="padding:6px 8px;border:1px solid var(--border);font-size:11px;color:var(--text-sub);">${u.itemCode || '-'}</td>
                     <td style="padding:6px 8px;border:1px solid var(--border);font-size:11px;">${u.desc}</td>
                     <td style="padding:6px 8px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${fmt.won(u.cost)}</td>
+                    <td style="padding:6px 8px;border:1px solid var(--border);font-size:11px;color:var(--warning);">${u.reason || '-'}</td>
                   </tr>
                 `).join('')}
               </tbody>
