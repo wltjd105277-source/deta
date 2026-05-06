@@ -744,6 +744,7 @@ function computeShippingBreakdown(currentDate, viewChannels, scope) {
     del: { count: 0, sum: 0 },           // 랙용 (허브랙_택배)
     lozenDel: { count: 0, sum: 0 },      // 일반 택배 (참고용)
     unmatched: { count: 0, sum: 0 },     // 랙 매칭 실패
+    unmatchedList: [],                   // 매칭 실패 DEL 트랜잭션 상세
   };
   for (const cg of viewChannels) {
     const dates = (scope === 'today')
@@ -781,6 +782,17 @@ function computeShippingBreakdown(currentDate, viewChannels, scope) {
             // 랙이 없는데 허브랙_택배 DEL이 있음 = 매칭 실패
             result.unmatched.count += rackDels.length;
             result.unmatched.sum += rackDelSum;
+            // 상세 목록에 각 트랜잭션 추가
+            rackDels.forEach(rd => {
+              result.unmatchedList.push({
+                date: d,
+                shop: rd.shop || '',
+                txn_id: rd.txn_id || '',
+                desc: rd.desc || '',
+                cost: extractRackShippingCost(rd),
+                cg,
+              });
+            });
           }
         }
         if (lozenDels.length > 0) {
@@ -1614,6 +1626,43 @@ function render() {
           </tr>` : ''}
         </tbody>
       </table>
+      ${(_shipMonth.unmatchedList || []).length > 0 ? `
+        <details style="margin-top:14px;border:1px solid var(--warning);border-radius:6px;background:#fff7ed;">
+          <summary style="padding:10px 14px;cursor:pointer;font-size:12px;font-weight:600;color:var(--warning);">
+            ⚠ 매칭 실패 DEL 상세 (${_shipMonth.unmatchedList.length}건) — 클릭해서 열기
+          </summary>
+          <div style="padding:0 14px 12px;max-height:400px;overflow:auto;">
+            <table style="width:100%;border-collapse:collapse;font-size:12px;">
+              <thead>
+                <tr style="background:var(--bg-sub);">
+                  <th style="padding:6px 8px;border:1px solid var(--border);text-align:left;">발주일</th>
+                  <th style="padding:6px 8px;border:1px solid var(--border);text-align:left;">쇼핑몰</th>
+                  <th style="padding:6px 8px;border:1px solid var(--border);text-align:left;">전표</th>
+                  <th style="padding:6px 8px;border:1px solid var(--border);text-align:left;">품명</th>
+                  <th style="padding:6px 8px;border:1px solid var(--border);text-align:right;">추출 배송비</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${_shipMonth.unmatchedList
+                  .sort((a,b) => a.date.localeCompare(b.date) || (a.txn_id || '').localeCompare(b.txn_id || ''))
+                  .map(u => `
+                  <tr>
+                    <td style="padding:6px 8px;border:1px solid var(--border);font-variant-numeric:tabular-nums;">${u.date}</td>
+                    <td style="padding:6px 8px;border:1px solid var(--border);">${u.shop}</td>
+                    <td style="padding:6px 8px;border:1px solid var(--border);font-variant-numeric:tabular-nums;color:var(--text-sub);">${u.txn_id || '-'}</td>
+                    <td style="padding:6px 8px;border:1px solid var(--border);font-size:11px;">${u.desc}</td>
+                    <td style="padding:6px 8px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${fmt.won(u.cost)}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+            <div style="margin-top:8px;font-size:11px;color:var(--text-sub);line-height:1.5;">
+              📌 위 트랜잭션들은 같은 전표(쇼핑몰+전표번호)에 랙 상품 라인이 없어 분배할 곳이 없습니다.<br>
+              → ERP에서 해당 전표의 랙 상품 라인이 누락됐는지, 또는 별도 발주로 처리됐는지 확인 필요.
+            </div>
+          </div>
+        </details>
+      ` : ''}
       <div style="margin-top:10px;font-size:11px;color:var(--text-sub);line-height:1.5;">
         💡 <strong>매출리스트.xlsx</strong> 다운로드 → 리스트 시트의 마지막 3개 컬럼(<code>배송비그룹</code>/<code>배송비단가</code>/<code>배송비차감마진</code>)에서 트랜잭션 단위로 정확한 값 확인 가능
       </div>
