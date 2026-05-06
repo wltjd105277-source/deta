@@ -641,16 +641,18 @@ function isShippingFeeTxn(t) {
   return /매출배송료|택배비|택배/.test(grp) || code.includes('매출배') || code.includes('택배');
 }
 
-// 랙 전용 배송료 DEL- (item_code/model/desc/group_name 어디든 '허브랙' 포함)
-function isRackShippingFeeTxn(t) {
+// 일반(로젠) 택배 DEL- (desc에 '로젠택배' 포함)
+function isLozenShippingFeeTxn(t) {
   if (!isShippingFeeTxn(t)) return false;
-  const all = `${t.item_code || ''} ${t.model || ''} ${t.desc || ''} ${t.group_name || ''}`;
-  return /허브랙/.test(all);
+  return /로젠택배/.test(String(t.desc || ''));
 }
 
-// 일반 배송료 DEL- (랙 전용이 아닌 일반 택배)
-function isLozenShippingFeeTxn(t) {
-  return isShippingFeeTxn(t) && !isRackShippingFeeTxn(t);
+// 랙 전용 배송료 DEL- (desc에 '매출 배송료' 또는 '허브랙' 포함, 단 로젠택배가 아닌)
+function isRackShippingFeeTxn(t) {
+  if (!isShippingFeeTxn(t)) return false;
+  if (isLozenShippingFeeTxn(t)) return false;
+  const desc = String(t.desc || '');
+  return /매출\s*배송료|허브랙/.test(desc);
 }
 
 // 한 슬롯(_transactions)에 대해 트랜잭션별 배송비를 사전 계산해서 캐시.
@@ -2901,10 +2903,12 @@ function buildListSheet(slot, currentDate) {
       const shipGrp = _isRackOrder ? _grpRaw : '';
       const shipRate = _isRackOrder ? (shippingMap.get(t) || 0) : 0;
       const netMargin = _isRackOrder ? margin - shipRate : margin;
-      // G열(모델명) 자동 라벨링 - DEL- 트랜잭션 빈칸 채우기
+      // G열(모델명) 자동 라벨링 - DEL- 배송비 트랜잭션 빈칸 채우기
+      // 규칙: desc에 '로젠택배' → '택배', '매출 배송료'/'허브랙' → '허브랙_택배'
       let modelDisplay = t.model || '';
-      if (!modelDisplay && String(t.item_code || '').startsWith('DEL-')) {
-        modelDisplay = isRackShippingFeeTxn(t) ? '허브랙_택배' : '택배';
+      if (!modelDisplay && category === '배송비') {
+        if (isLozenShippingFeeTxn(t)) modelDisplay = '택배';
+        else if (isRackShippingFeeTxn(t)) modelDisplay = '허브랙_택배';
       }
       aoa.push([
         null, monthYY, null, d, ch,
