@@ -655,6 +655,25 @@ function isRackShippingFeeTxn(t) {
   return /매출\s*배송료|허브랙/.test(desc);
 }
 
+// DEL-허브랙_택배 desc 텍스트에서 셀러 부담 배송비 추출
+//   예: "LS-1600H(B) 1600HQ 매출 배송료 / 경동화물 60,500원 / 경동택배 77,000원 / 선불기준"
+//   → '경동택배 77,000원'에서 77000 추출 (셀러가 실제 부담한 금액)
+//   폴백 1: 다른 'XXX택배 NN원' 패턴 (경동 외 택배사)
+//   폴백 2: cost_unit × qty
+function extractRackShippingCost(t) {
+  const desc = String(t.desc || '');
+  // 1) 경동택배 우선
+  let m = desc.match(/경동택배\s*([\d,]+)\s*원/);
+  if (m) return parseInt(m[1].replace(/,/g, ''), 10) || 0;
+  // 2) 'XXX택배 NN원' 형태가 여러 개면 마지막 것 (대개 셀러 부담 비용)
+  const all = [...desc.matchAll(/[가-힣]+택배\s*([\d,]+)\s*원/g)];
+  if (all.length > 0) {
+    return parseInt(all[all.length - 1][1].replace(/,/g, ''), 10) || 0;
+  }
+  // 3) 그래도 없으면 cost_unit × qty
+  return (t.cost_unit || 0) * (t.qty || 0);
+}
+
 // 한 슬롯(_transactions)에 대해 트랜잭션별 배송비를 사전 계산해서 캐시.
 //   key: txn (object identity), value: shipping cost (원)
 // 같은 전표(txn_id+shop)의 DEL- 합계를 랙 라인 수로 나눠 분배.
@@ -670,10 +689,10 @@ function computeShippingMap(txns) {
   });
   for (const key of Object.keys(byTicket)) {
     const lines = byTicket[key];
-    // 같은 전표의 '허브랙_택배' DEL-매출배송료 매입가합계 (공급가는 0인 경우 多)
-    // = 셀러가 실제 지출한 배송비
+    // 같은 전표의 '허브랙_택배' DEL-매출배송료 셀러 부담 합계
+    // = desc에서 '경동택배 NN원' 추출 (매입가 컬럼이 0인 경우 多)
     const delSum = lines.filter(isRackShippingFeeTxn).reduce(
-      (s, l) => s + ((l.cost_unit || 0) * (l.qty || 0)), 0);
+      (s, l) => s + extractRackShippingCost(l), 0);
     // 랙 라인들 (반품/0수량 제외)
     const rackLines = lines.filter(l => {
       if (String(l.item_code || '').startsWith('DEL-')) return false;
@@ -753,9 +772,9 @@ function computeShippingBreakdown(currentDate, viewChannels, scope) {
           return isRackGroup(shippingGroupOf(l.model));
         });
         if (rackDels.length > 0) {
-          // 매입가합계 = cost_unit * qty (셀러 실제 지출)
+          // desc에서 '경동택배 NN원' 추출 (셀러 실제 지출)
           const rackDelSum = rackDels.reduce(
-            (s,l) => s + ((l.cost_unit || 0) * (l.qty || 0)), 0);
+            (s,l) => s + extractRackShippingCost(l), 0);
           result.del.count += rackDels.length;
           result.del.sum += rackDelSum;
           if (rackLines.length === 0) {
@@ -1574,7 +1593,7 @@ function render() {
             <td style="padding:8px 10px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;font-size:12px;">${fmt.won(_shipMonth.del.sum)}</td>
             <td style="padding:8px 10px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;font-size:12px;">${_shipToday.del.count.toLocaleString()}건</td>
             <td style="padding:8px 10px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;font-size:12px;">${fmt.won(_shipToday.del.sum)}</td>
-            <td style="padding:8px 10px;border:1px solid var(--border);font-size:11px;color:var(--text-sub);">랙 분배에 사용되는 매입가합계 (실제 지출)</td>
+            <td style="padding:8px 10px;border:1px solid var(--border);font-size:11px;color:var(--text-sub);">desc에서 추출한 '경동택배' 금액 (실제 지출)</td>
           </tr>
           <tr>
             <td style="padding:8px 10px;border:1px solid var(--border);font-size:12px;color:var(--text-sub);">참고: DEL-택배 (로젠)</td>
