@@ -602,25 +602,45 @@ const GROUP_CHANNELS = {
   '샵N': ['스마트스토어', '오늘의집'],
 };
 
-// ─────────────── 배송비 그룹 (모델명 매칭) ───────────────
-// 적용 대상: 허브랙(소형 랙), 서버랙(대형 랙)에만 자동 차감 적용.
-// ※ 자동 계산 (사용자 입력 없음):
-//   - 허브랙/서버랙: 같은 전표의 DEL-매출배송료(택배비) 공급가액을
-//                  그 전표의 랙 라인 수로 나눠서 각 랙 라인에 분배 차감
-//   - 로젠택배(랙 외) / 반품 / 할인 / DEL- 트랜잭션은 차감 없음
-//     (ERP의 cost_unit이 이미 배송비를 반영함)
-const SHIPPING_GROUPS_PRESET = {
-  '허브랙': [
-    'LS-1000H', 'LS-1000HB',
-  ],
-  '서버랙': [
-    'LS-1200H', 'LS-1200HB', 'LS-1200HQ',
-    'LS-1600H', 'LS-1600HB', 'LS-1600HBO', 'LS-1600HQ',
-    'LS-1800H', 'LS-1800HB', 'LS-1800HBS', 'LS-1800HS',
-    'LS-2000H', 'LS-2000HB', 'LS-2000HBS', 'LS-2000HS',
-  ],
-  // (그 외 모든 모델 = '로젠택배')
+// ─────────────── 배송비 그룹 (DEL-매출배XXX 품목코드 매핑) ───────────────
+// 사용자 제공 매핑표 기반:
+//   item_code → { group, models, rate(경동택배 단가) }
+//   group: 허브랙 / 서버랙 / 로젠택배
+//   match: 같은 일자 + 같은 쇼핑몰의 매핑 모델 라인에 균등 분배
+const SHIPPING_DEL_MAP = {
+  'DEL-매출배003': { group: '로젠택배', models: ['LS-240HM'], rate: 3000 },
+  'DEL-매출배004': { group: '로젠택배', models: ['LS-420HM'], rate: 3000 },
+  'DEL-매출배005': { group: '로젠택배', models: ['LS-240HC'], rate: 3000 },
+  'DEL-매출배006': { group: '허브랙', models: ['LS-300H', 'LS-300HB', 'LS-300HR'], rate: 11000 },
+  'DEL-매출배007': { group: '허브랙', models: ['LS-500H', 'LS-500HB'], rate: 16500 },
+  'DEL-매출배008': { group: '허브랙', models: ['LS-750H', 'LS-750HB'], rate: 27500 },
+  'DEL-매출배009': { group: '허브랙', models: ['LS-1000H', 'LS-1000HB', 'LS-1000HQ'], rate: 38500 },
+  'DEL-매출배010': { group: '허브랙', models: ['LS-1200H', 'LS-1200HB', 'LS-1200HQ'], rate: 55000 },
+  'DEL-매출배011': { group: '허브랙', models: ['LS-1600H', 'LS-1600HB', 'LS-1600HQ'], rate: 77000 },
+  'DEL-매출배012': { group: '허브랙', models: ['LS-1800H', 'LS-1800HB', 'LS-1800HBS', 'LS-1800HQ'], rate: 82500 },
+  'DEL-매출배013': { group: '허브랙', models: ['LS-2000H', 'LS-2000HB', 'LS-2000HQ'], rate: 99000 },
+  'DEL-매출배014': { group: '서버랙', models: ['LS-750HS'], rate: 44000 },
+  'DEL-매출배015': { group: '서버랙', models: ['LS-1200HS'], rate: 66000 },
+  'DEL-매출배016': { group: '서버랙', models: ['LS-1800HS', 'LS-1800HSQ'], rate: 99000 },
+  'DEL-매출배017': { group: '서버랙', models: ['LS-2000HS', 'LS-2000HSQ'], rate: 121000 },
+  'DEL-매출배018': { group: '허브랙', models: ['LS-800HQ'], rate: 38500 },
+  'DEL-매출배033': { group: '서버랙', models: ['LS-1600HSQ'], rate: 82500 },
+  'DEL-매출배040': { group: '서버랙', models: ['LS-500HS'], rate: 33000 },
+  'DEL-매출배041': { group: '허브랙', models: ['LS-1600HO', 'LS-1600HBO'], rate: 13800 },
+  'DEL-매출배042': { group: '허브랙', models: ['LS-1800HO', 'LS-1800HBO'], rate: 16000 },
+  'DEL-매출배043': { group: '허브랙', models: ['LS-2000HO', 'LS-2000HBO'], rate: 18200 },
 };
+
+// 매핑 테이블에서 자동 도출되는 모델 → 그룹 인덱스
+const SHIPPING_GROUPS_PRESET = (() => {
+  const g = { '허브랙': [], '서버랙': [] };
+  for (const info of Object.values(SHIPPING_DEL_MAP)) {
+    if (info.group === '허브랙' || info.group === '서버랙') {
+      g[info.group].push(...info.models);
+    }
+  }
+  return g;
+})();
 
 function shippingGroupOf(modelName) {
   const m = String(modelName || '').trim();
@@ -633,82 +653,83 @@ function shippingGroupOf(modelName) {
 
 function isRackGroup(g) { return g === '허브랙' || g === '서버랙'; }
 
-// DEL-매출배송료(택배비) 트랜잭션인지 판별 (모든 종류)
+// 품목코드로 매핑 정보 조회
+function shippingDelInfoOf(t) {
+  return SHIPPING_DEL_MAP[String(t.item_code || '')] || null;
+}
+
+// DEL-매출배송료(택배비) 트랜잭션 (모든 종류)
 function isShippingFeeTxn(t) {
   const code = String(t.item_code || '');
   if (!code.startsWith('DEL-')) return false;
+  if (SHIPPING_DEL_MAP[code]) return true;
+  // 폴백: group_name 기반
   const grp = String(t.group_name || '');
   return /매출배송료|택배비|택배/.test(grp) || code.includes('매출배') || code.includes('택배');
 }
 
-// 일반(로젠) 택배 DEL- (desc에 '로젠택배' 포함)
+// 일반(로젠) 택배 DEL-
 function isLozenShippingFeeTxn(t) {
+  const info = shippingDelInfoOf(t);
+  if (info) return info.group === '로젠택배';
+  // 폴백: desc 키워드
   if (!isShippingFeeTxn(t)) return false;
   return /로젠택배/.test(String(t.desc || ''));
 }
 
-// 랙 전용 배송료 DEL- (desc에 '매출 배송료' 또는 '허브랙' 포함, 단 로젠택배가 아닌)
+// 랙 전용 배송료 DEL-
 function isRackShippingFeeTxn(t) {
+  const info = shippingDelInfoOf(t);
+  if (info) return info.group === '허브랙' || info.group === '서버랙';
+  // 폴백: desc 키워드 (단 로젠 아닌)
   if (!isShippingFeeTxn(t)) return false;
   if (isLozenShippingFeeTxn(t)) return false;
-  const desc = String(t.desc || '');
-  return /매출\s*배송료|허브랙/.test(desc);
+  return /매출\s*배송료|허브랙/.test(String(t.desc || ''));
 }
 
-// DEL-허브랙_택배 desc 텍스트에서 셀러 부담 배송비 추출
-//   예: "LS-1600H(B) 1600HQ 매출 배송료 / 경동화물 60,500원 / 경동택배 77,000원 / 선불기준"
-//   → '경동택배 77,000원'에서 77000 추출 (셀러가 실제 부담한 금액)
-//   폴백 1: 다른 'XXX택배 NN원' 패턴 (경동 외 택배사)
-//   폴백 2: cost_unit × qty
+// 셀러 부담 배송비 추출
+//   1순위: 매핑된 rate (정확함)
+//   2순위: desc의 '경동택배 NN원' 패턴
+//   3순위: 다른 'XXX택배 NN원' 패턴
+//   4순위: cost_unit × qty
 function extractRackShippingCost(t) {
+  const info = shippingDelInfoOf(t);
+  if (info && info.rate) return info.rate;
   const desc = String(t.desc || '');
-  // 1) 경동택배 우선
   let m = desc.match(/경동택배\s*([\d,]+)\s*원/);
   if (m) return parseInt(m[1].replace(/,/g, ''), 10) || 0;
-  // 2) 'XXX택배 NN원' 형태가 여러 개면 마지막 것 (대개 셀러 부담 비용)
   const all = [...desc.matchAll(/[가-힣]+택배\s*([\d,]+)\s*원/g)];
   if (all.length > 0) {
     return parseInt(all[all.length - 1][1].replace(/,/g, ''), 10) || 0;
   }
-  // 3) 그래도 없으면 cost_unit × qty
   return (t.cost_unit || 0) * (t.qty || 0);
 }
 
-// 한 슬롯(_transactions)에 대해 트랜잭션별 배송비를 사전 계산해서 캐시.
-//   key: txn (object identity), value: shipping cost (원)
-// 같은 전표(txn_id+shop)의 DEL- 합계를 랙 라인 수로 나눠 분배.
+// ─── 매칭 알고리즘: item_code 매핑 모델 → 같은 일자+쇼핑몰의 그 모델 라인 ───
 function computeShippingMap(txns) {
   const map = new WeakMap();
   if (!txns || !txns.length) return map;
-  // 전표 그룹화: key = `${shop}__${txn_id}`
-  const byTicket = {};
-  txns.forEach(t => {
-    const key = `${t.shop || ''}__${t.txn_id || ''}`;
-    if (!byTicket[key]) byTicket[key] = [];
-    byTicket[key].push(t);
-  });
-  for (const key of Object.keys(byTicket)) {
-    const lines = byTicket[key];
-    // 같은 전표의 '허브랙_택배' DEL-매출배송료 셀러 부담 합계
-    // = desc에서 '경동택배 NN원' 추출 (매입가 컬럼이 0인 경우 多)
-    const delSum = lines.filter(isRackShippingFeeTxn).reduce(
-      (s, l) => s + extractRackShippingCost(l), 0);
-    // 랙 라인들 (반품/0수량 제외)
-    const rackLines = lines.filter(l => {
+
+  txns.filter(isRackShippingFeeTxn).forEach(rd => {
+    const info = shippingDelInfoOf(rd);
+    if (!info || !info.models || info.models.length === 0) return;
+    // 같은 쇼핑몰 + 매핑된 모델 라인
+    const targets = txns.filter(l => {
       if (String(l.item_code || '').startsWith('DEL-')) return false;
       if (/판매장려금/.test(String(l.group_name || ''))) return false;
       if ((l.qty || 0) < 0) return false;
-      return isRackGroup(shippingGroupOf(l.model));
+      if ((l.shop || '') !== (rd.shop || '')) return false;
+      return info.models.includes(l.model || '');
     });
-    // 랙 라인에 DEL-amount 균등 분배 (랙만 적용)
-    if (rackLines.length > 0 && delSum > 0) {
-      const per = delSum / rackLines.length;
-      rackLines.forEach(l => map.set(l, per));
-    } else {
-      rackLines.forEach(l => map.set(l, 0));
-    }
-    // 로젠택배(랙 외) 라인은 차감 없음 (ERP의 cost_unit이 이미 처리)
-  }
+    if (targets.length === 0) return;  // 매칭 실패
+    const cost = extractRackShippingCost(rd);
+    const per = cost / targets.length;
+    targets.forEach(tl => {
+      const prev = map.get(tl) || 0;
+      map.set(tl, prev + per);
+    });
+  });
+
   return map;
 }
 
@@ -756,51 +777,45 @@ function computeShippingBreakdown(currentDate, viewChannels, scope) {
       const txns = slot._transactions;
       const map = computeShippingMap(txns);
       // 전표 단위 그룹화 - 매칭/미매칭 검출용
-      const byTicket = {};
-      txns.forEach(t => {
-        const key = `${t.shop || ''}__${t.txn_id || ''}`;
-        if (!byTicket[key]) byTicket[key] = [];
-        byTicket[key].push(t);
+      // 새 매칭 알고리즘: 같은 일자+쇼핑몰 매핑 모델 매칭
+      const allRackDels = txns.filter(isRackShippingFeeTxn);
+      const allLozenDels = txns.filter(isLozenShippingFeeTxn);
+      // 랙용 DEL: 매핑 모델 라인 검색
+      allRackDels.forEach(rd => {
+        const info = shippingDelInfoOf(rd);
+        const cost = extractRackShippingCost(rd);
+        result.del.count += 1;
+        result.del.sum += cost;
+        let matched = false;
+        if (info && info.models && info.models.length > 0) {
+          const targets = txns.filter(l => {
+            if (String(l.item_code || '').startsWith('DEL-')) return false;
+            if (/판매장려금/.test(String(l.group_name || ''))) return false;
+            if ((l.qty || 0) < 0) return false;
+            if ((l.shop || '') !== (rd.shop || '')) return false;
+            return info.models.includes(l.model || '');
+          });
+          matched = targets.length > 0;
+        }
+        if (!matched) {
+          result.unmatched.count += 1;
+          result.unmatched.sum += cost;
+          result.unmatchedList.push({
+            date: d,
+            shop: rd.shop || '',
+            txn_id: rd.txn_id || '',
+            desc: rd.desc || '',
+            cost,
+            cg,
+          });
+        }
       });
-      for (const key of Object.keys(byTicket)) {
-        const lines = byTicket[key];
-        const rackDels = lines.filter(isRackShippingFeeTxn);
-        const lozenDels = lines.filter(isLozenShippingFeeTxn);
-        const rackLines = lines.filter(l => {
-          if (String(l.item_code || '').startsWith('DEL-')) return false;
-          if (/판매장려금/.test(String(l.group_name || ''))) return false;
-          if ((l.qty || 0) < 0) return false;
-          return isRackGroup(shippingGroupOf(l.model));
-        });
-        if (rackDels.length > 0) {
-          // desc에서 '경동택배 NN원' 추출 (셀러 실제 지출)
-          const rackDelSum = rackDels.reduce(
-            (s,l) => s + extractRackShippingCost(l), 0);
-          result.del.count += rackDels.length;
-          result.del.sum += rackDelSum;
-          if (rackLines.length === 0) {
-            // 랙이 없는데 허브랙_택배 DEL이 있음 = 매칭 실패
-            result.unmatched.count += rackDels.length;
-            result.unmatched.sum += rackDelSum;
-            // 상세 목록에 각 트랜잭션 추가
-            rackDels.forEach(rd => {
-              result.unmatchedList.push({
-                date: d,
-                shop: rd.shop || '',
-                txn_id: rd.txn_id || '',
-                desc: rd.desc || '',
-                cost: extractRackShippingCost(rd),
-                cg,
-              });
-            });
-          }
-        }
-        if (lozenDels.length > 0) {
-          result.lozenDel = result.lozenDel || { count: 0, sum: 0 };
-          result.lozenDel.count += lozenDels.length;
-          result.lozenDel.sum += lozenDels.reduce(
-            (s,l) => s + ((l.cost_unit || 0) * (l.qty || 0)), 0);
-        }
+      // 로젠택배 DEL: 참고용 합계
+      if (allLozenDels.length > 0) {
+        result.lozenDel = result.lozenDel || { count: 0, sum: 0 };
+        result.lozenDel.count += allLozenDels.length;
+        result.lozenDel.sum += allLozenDels.reduce(
+          (s,l) => s + ((l.cost_unit || 0) * (l.qty || 0)), 0);
       }
       // 그룹별 카운트/합계
       txns.forEach(t => {
