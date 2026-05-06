@@ -2901,9 +2901,14 @@ function buildListSheet(slot, currentDate) {
       const shipGrp = _isRackOrder ? _grpRaw : '';
       const shipRate = _isRackOrder ? (shippingMap.get(t) || 0) : 0;
       const netMargin = _isRackOrder ? margin - shipRate : margin;
+      // G열(모델명) 자동 라벨링 - DEL- 트랜잭션 빈칸 채우기
+      let modelDisplay = t.model || '';
+      if (!modelDisplay && String(t.item_code || '').startsWith('DEL-')) {
+        modelDisplay = isRackShippingFeeTxn(t) ? '허브랙_택배' : '택배';
+      }
       aoa.push([
         null, monthYY, null, d, ch,
-        t.desc || '', t.model || '',
+        t.desc || '', modelDisplay,
         qty, category, null, null, null,
         t.cost_unit || 0, cost, unitPrice, amount, unitPrice, amount,
         null, 0, 0, margin,
