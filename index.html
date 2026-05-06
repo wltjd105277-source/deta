@@ -1628,8 +1628,9 @@ function render() {
       </table>
       ${(_shipMonth.unmatchedList || []).length > 0 ? `
         <details style="margin-top:14px;border:1px solid var(--warning);border-radius:6px;background:#fff7ed;">
-          <summary style="padding:10px 14px;cursor:pointer;font-size:12px;font-weight:600;color:var(--warning);">
-            ⚠ 매칭 실패 DEL 상세 (${_shipMonth.unmatchedList.length}건) — 클릭해서 열기
+          <summary style="padding:10px 14px;cursor:pointer;font-size:12px;font-weight:600;color:var(--warning);display:flex;align-items:center;gap:10px;">
+            <span>⚠ 매칭 실패 DEL 상세 (${_shipMonth.unmatchedList.length}건) — 클릭해서 열기</span>
+            <button data-dl-shipping-match="1" style="margin-left:auto;padding:5px 12px;font-size:11px;background:var(--warning);color:white;border:none;border-radius:4px;cursor:pointer;font-weight:600;">📥 매칭 상태 엑셀 다운로드</button>
           </summary>
           <div style="padding:0 14px 12px;max-height:400px;overflow:auto;">
             <table style="width:100%;border-collapse:collapse;font-size:12px;">
@@ -2383,6 +2384,14 @@ document.body.addEventListener('change', e => {
     showToast('광고비를 저장했습니다', 'success');
     return;
   }
+  // 배송비 매칭 상태 엑셀 다운로드
+  const dlMatch = e.target.closest('button[data-dl-shipping-match]');
+  if (dlMatch) {
+    e.preventDefault();
+    e.stopPropagation();
+    downloadShippingMatchExcel();
+    return;
+  }
 });
 document.body.addEventListener('keydown', e => {
   const inp = e.target.closest('input[data-goal-key]');
@@ -2393,6 +2402,108 @@ document.body.addEventListener('keydown', e => {
 // Excel 다운로드 - 매출데이터.xlsx
 document.getElementById('btnDlDetail').addEventListener('click', () => downloadExcel('detail'));
 document.getElementById('btnDlList').addEventListener('click', () => downloadExcel('list'));
+
+// 배송비 매칭 상태 엑셀 (2 시트: 매칭완료 / 매칭실패)
+function downloadShippingMatchExcel() {
+  if (!currentDate || !store[currentDate]) {
+    showToast('현재 일자가 선택되지 않았습니다', 'error');
+    return;
+  }
+  const month = currentDate.slice(0, 7);
+  const matchedRows = [];
+  const unmatchedRows = [];
+
+  const allCgs = Object.keys(store[currentDate] || {}).filter(cg =>
+    store[currentDate][cg] && store[currentDate][cg]._source === '판매현황');
+  for (const cg of allCgs) {
+    const dates = Object.keys(store).filter(d => d.startsWith(month) && d <= currentDate).sort();
+    for (const d of dates) {
+      const slot = store[d] && store[d][cg];
+      if (!slot || !slot._transactions) continue;
+      const byTicket = {};
+      slot._transactions.forEach(t => {
+        const key = `${t.shop || ''}__${t.txn_id || ''}`;
+        if (!byTicket[key]) byTicket[key] = [];
+        byTicket[key].push(t);
+      });
+      for (const key of Object.keys(byTicket)) {
+        const lines = byTicket[key];
+        const rackDels = lines.filter(isRackShippingFeeTxn);
+        if (rackDels.length === 0) continue;
+        const rackLines = lines.filter(l => {
+          if (String(l.item_code || '').startsWith('DEL-')) return false;
+          if (/판매장려금/.test(String(l.group_name || ''))) return false;
+          if ((l.qty || 0) < 0) return false;
+          return isRackGroup(shippingGroupOf(l.model));
+        });
+        const delSum = rackDels.reduce((s, l) => s + extractRackShippingCost(l), 0);
+
+        if (rackLines.length > 0) {
+          const perLine = delSum / rackLines.length;
+          rackLines.forEach(rl => {
+            const lineMargin = (rl.amount || 0) - (rl.cost_unit || 0) * (rl.qty || 0);
+            const delDescs = rackDels.map(rd => rd.desc || '').filter(Boolean).join(' | ');
+            matchedRows.push([
+              d, rl.shop || '', rl.txn_id || '', rl.model || '',
+              shippingGroupOf(rl.model), rl.qty || 0, rl.amount || 0,
+              (rl.cost_unit || 0) * (rl.qty || 0), lineMargin, perLine,
+              lineMargin - perLine, delDescs,
+            ]);
+          });
+        } else {
+          rackDels.forEach(rd => {
+            const m = (rd.desc || '').match(/LS-[A-Z0-9\-()]+/);
+            const candidates = [];
+            for (const t2 of slot._transactions) {
+              if (t2 === rd) continue;
+              if (String(t2.item_code || '').startsWith('DEL-')) continue;
+              if ((t2.qty || 0) < 0) continue;
+              if (!isRackGroup(shippingGroupOf(t2.model))) continue;
+              if ((t2.shop || '') !== (rd.shop || '')) continue;
+              candidates.push(`${t2.model}(전표${t2.txn_id || '-'}, ${t2.qty}개)`);
+            }
+            unmatchedRows.push([
+              d, rd.shop || '', rd.txn_id || '', rd.desc || '',
+              m ? m[0] : '', extractRackShippingCost(rd),
+              candidates.length > 0 ? candidates.join(' | ') : '(없음)',
+            ]);
+          });
+        }
+      }
+    }
+  }
+
+  if (matchedRows.length === 0 && unmatchedRows.length === 0) {
+    showToast('배송비 매칭 데이터가 없습니다', 'error');
+    return;
+  }
+
+  const wb = XLSX.utils.book_new();
+  const m_aoa = [
+    ['발주일','쇼핑몰','전표','랙모델','그룹','수량','공급가','매입가합계','원래마진','분배된배송비','차감마진','매칭된DEL품명'],
+    ...matchedRows
+  ];
+  const ws_m = XLSX.utils.aoa_to_sheet(m_aoa);
+  ws_m['!cols'] = [
+    {wch:12},{wch:16},{wch:8},{wch:18},{wch:8},{wch:6},
+    {wch:11},{wch:13},{wch:11},{wch:13},{wch:11},{wch:60}
+  ];
+  XLSX.utils.book_append_sheet(wb, borderAll(formatNumbers(ws_m)), '매칭완료');
+
+  const u_aoa = [
+    ['발주일','쇼핑몰','전표','품명','추정모델(LS-)','추출배송비','같은날짜+쇼핑몰의 랙 라인 후보'],
+    ...unmatchedRows
+  ];
+  const ws_u = XLSX.utils.aoa_to_sheet(u_aoa);
+  ws_u['!cols'] = [
+    {wch:12},{wch:16},{wch:8},{wch:60},{wch:18},{wch:12},{wch:60}
+  ];
+  XLSX.utils.book_append_sheet(wb, borderAll(formatNumbers(ws_u)), '매칭실패');
+
+  const dStr = currentDate.slice(2).replace(/-/g, '.');
+  XLSX.writeFile(wb, `랜스타_배송비매칭_${dStr}.xlsx`);
+  showToast(`매칭완료 ${matchedRows.length}건 / 매칭실패 ${unmatchedRows.length}건 다운로드 완료`, 'success');
+}
 
 function downloadExcel(kind) {
   if (!currentDate || !store[currentDate]) {
