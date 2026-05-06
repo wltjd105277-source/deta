@@ -2398,6 +2398,13 @@ function buildReportSheet(slot, cg, date) {
   return ws;
 }
 
+// 시트의 사용 영역(!ref) 전체에 thin border 적용 (모든 시트 공용)
+function borderAll(ws) {
+  if (!ws || !ws['!ref']) return ws;
+  applyBorders(ws, [{ range: ws['!ref'] }]);
+  return ws;
+}
+
 // 셀 범위에 thin black border 적용 (xlsx-js-style)
 function applyBorders(ws, regions) {
   const thin = { style: 'thin', color: { rgb: '000000' } };
@@ -2503,7 +2510,7 @@ function buildIlilSheet(slot, cg, isMonthly) {
   });
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   ws['!cols'] = [{wch:18},{wch:12},{wch:14},{wch:14}];
-  return formatNumbers(ws);
+  return borderAll(formatNumbers(ws));
 }
 
 function buildSeriesSheet(slot, isMonthly) {
@@ -2518,11 +2525,11 @@ function buildSeriesSheet(slot, isMonthly) {
     });
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   ws['!cols'] = [{wch:22},{wch:12},{wch:14},{wch:14},{wch:2},{wch:22}];
-  return formatNumbers(ws);
+  return borderAll(formatNumbers(ws));
 }
 
 function buildHowToSheet() {
-  return XLSX.utils.aoa_to_sheet([
+  return borderAll(XLSX.utils.aoa_to_sheet([
     ['일일 / 당월', null],
     [' - 기존 작성하시던 데이터에서 \'sheet쇼핑몰별누적판매\'에서 값추출(*시리즈명/수량/공급가액/마진)', null],
     [' - 새창열어서 텍스트만 복사/붙여넣기', null],
@@ -2544,7 +2551,7 @@ function buildHowToSheet() {
     [null, null],
     [null, null],
     ['이름통일', null],
-  ]);
+  ]));
 }
 
 function buildSheet1(slot) {
@@ -2556,7 +2563,7 @@ function buildSheet1(slot) {
     .forEach(p => aoa.push([p.name, p.qty || 0, p.revenue_amount || 0]));
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   ws['!cols'] = [{wch:22},{wch:12},{wch:14}];
-  return formatNumbers(ws);
+  return borderAll(formatNumbers(ws));
 }
 
 // ─────────── 매출리스트 시트 빌더 ───────────
@@ -2607,7 +2614,7 @@ function buildListSheet(slot, currentDate) {
     {wch:12},{wch:13},{wch:12},{wch:13},{wch:12},{wch:13},
     {wch:6},{wch:11},{wch:11},{wch:11}
   ];
-  return formatNumbers(ws);
+  return borderAll(formatNumbers(ws));
 }
 
 function buildIlbyeolMaechul(slot) {
@@ -2670,7 +2677,7 @@ function buildIlbyeolMaechul(slot) {
   }
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   ws['!cols'] = [{wch:11},{wch:14},{wch:18},{wch:8},{wch:7},{wch:12},{wch:12},{wch:12},{wch:11},{wch:11},{wch:11}];
-  return formatNumbers(ws);
+  return borderAll(formatNumbers(ws));
 }
 
 function buildIlbyeolNujeok(slot) {
@@ -2721,7 +2728,7 @@ function buildIlbyeolNujeok(slot) {
   }
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   ws['!cols'] = [{wch:11},{wch:8},{wch:8},{wch:14},{wch:14},{wch:14},{wch:14}];
-  return formatNumbers(ws);
+  return borderAll(formatNumbers(ws));
 }
 
 function buildSangpum(slot) {
@@ -2771,7 +2778,7 @@ function buildSangpum(slot) {
   });
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   ws['!cols'] = [{wch:22},{wch:12},{wch:12},{wch:8},{wch:12},{wch:12},{wch:12},{wch:8},{wch:12},{wch:12},{wch:12},{wch:8}];
-  return formatNumbers(ws);
+  return borderAll(formatNumbers(ws));
 }
 
 function buildShoppingMall(slot) {
@@ -2835,7 +2842,7 @@ function buildShoppingMall(slot) {
   aoa.push(['총합계', null, grandQty, grandCost, grandAmt, grandAmt, grandMargin]);
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   ws['!cols'] = [{wch:18},{wch:8},{wch:8},{wch:14},{wch:14},{wch:14},{wch:14}];
-  return formatNumbers(ws);
+  return borderAll(formatNumbers(ws));
 }
 
 document.getElementById('btnImport').addEventListener('click', () => document.getElementById('importInput').click());
