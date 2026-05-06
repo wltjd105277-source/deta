@@ -602,6 +602,69 @@ const GROUP_CHANNELS = {
   '샵N': ['스마트스토어', '오늘의집'],
 };
 
+// ─────────────── 배송비 그룹 (모델명 매칭) ───────────────
+// 적용 대상: 허브랙(소형 랙), 서버랙(대형 랙). 그 외는 모두 '로젠택배' 그룹.
+// 단가는 사이트에서 입력 → localStorage(`shipping_<group>`)에 저장.
+// 마진 = 공급가 − 입고단가×수량 − 해당 배송비(트랜잭션 1건당 1회 차감)
+const SHIPPING_GROUPS_PRESET = {
+  '허브랙': [
+    'LS-1000H', 'LS-1000HB',
+  ],
+  '서버랙': [
+    'LS-1200H', 'LS-1200HB', 'LS-1200HQ',
+    'LS-1600H', 'LS-1600HB', 'LS-1600HBO', 'LS-1600HQ',
+    'LS-1800H', 'LS-1800HB', 'LS-1800HBS', 'LS-1800HS',
+    'LS-2000H', 'LS-2000HB', 'LS-2000HBS', 'LS-2000HS',
+  ],
+  // (그 외 모든 모델 = '로젠택배')
+};
+const SHIPPING_GROUP_KEYS = ['허브랙', '서버랙', '로젠택배'];
+
+function shippingGroupOf(modelName) {
+  const m = String(modelName || '').trim();
+  if (!m) return '로젠택배';
+  for (const [g, list] of Object.entries(SHIPPING_GROUPS_PRESET)) {
+    if (list.includes(m)) return g;
+  }
+  return '로젠택배';
+}
+
+function shippingRateOf(group) {
+  const v = localStorage.getItem(`shipping_${group}`);
+  const n = v ? parseFloat(v) : 0;
+  return Number.isFinite(n) ? n : 0;
+}
+
+// 트랜잭션 1건의 "배송비 차감 마진"
+//  - 주문(일반 판매)에만 배송비를 1회 차감
+//  - 반품/할인/배송비 자체 트랜잭션은 그대로 마진 사용
+function txnNetMargin(t) {
+  const margin = (t.amount || 0) - (t.cost_unit || 0) * (t.qty || 0);
+  const code = String(t.item_code || '');
+  const grp = String(t.group_name || '');
+  if (code.startsWith('DEL-')) return margin;
+  if (/판매장려금/.test(grp)) return margin;
+  if ((t.qty || 0) < 0) return margin;
+  return margin - shippingRateOf(shippingGroupOf(t.model));
+}
+
+// 슬롯의 트랜잭션 전체에 대한 일/월 net margin 합산
+function computeNetMargin(slot) {
+  const txns = slot._transactions || [];
+  return txns.reduce((sum, t) => sum + txnNetMargin(t), 0);
+}
+function computeMonthNetMargin(currentDate, cg) {
+  const month = currentDate.slice(0, 7);
+  let total = 0;
+  for (const d of Object.keys(store)) {
+    if (!d.startsWith(month) || d > currentDate) continue;
+    const s = store[d] && store[d][cg];
+    if (!s || !s._transactions) continue;
+    s._transactions.forEach(t => total += txnNetMargin(t));
+  }
+  return total;
+}
+
 function processSalesStatus(filename, wb) {
   const ws = wb.Sheets['판매현황'];
   const rows = sheetRows(ws);
@@ -1271,6 +1334,35 @@ function render() {
         </div>
       </details>`;
     }
+
+    // ─── 배송비 단가 입력 패널 ───
+    html += `<details class="panel" style="margin-bottom:16px;padding:0;" id="shippingPanel">
+      <summary style="padding:14px 18px;cursor:pointer;font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px;list-style:none;">
+        🚚 배송비 단가 (배송비 차감 마진 계산용) <span style="font-size:11px;color:var(--text-sub);font-weight:500;">(클릭해서 펼치기)</span>
+      </summary>
+      <div style="padding:0 18px 16px;display:flex;flex-wrap:wrap;gap:14px;align-items:center;border-top:1px solid var(--border);">
+        ${SHIPPING_GROUP_KEYS.map(g => {
+          const k = `shipping_${g}`;
+          const v = localStorage.getItem(k) || '';
+          return `<div style="display:flex;align-items:center;gap:6px;margin-top:10px;">
+            <span class="badge-ch other" style="white-space:nowrap;">${g}</span>
+            <input type="number" data-shipping-key="${k}" value="${v}" placeholder="0"
+              style="width:110px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-variant-numeric:tabular-nums;">
+            <span style="font-size:11px;color:var(--text-sub);">원/건</span>
+          </div>`;
+        }).join('')}
+        <span style="font-size:11px;color:var(--text-sub);margin-top:10px;">엔터로 저장 → KPI/매출리스트에 반영. 트랜잭션 1건당 1회 차감.</span>
+      </div>
+    </details>`;
+  }
+
+  // KPI 카드 - 배송비 차감 마진 (그룹별 합산)
+  let _netMargin_today = 0, _netMargin_month = 0;
+  for (const cg of viewChannels) {
+    const slot = store[currentDate] && store[currentDate][cg];
+    if (!slot || slot._source !== '판매현황') continue;
+    _netMargin_today += computeNetMargin(slot);
+    _netMargin_month += computeMonthNetMargin(currentDate, cg);
   }
 
   // KPI 카드
@@ -1304,6 +1396,11 @@ function render() {
         const color = diff >= 0 ? 'var(--success)' : 'var(--danger)';
         return `전월 ${fmt.shortWon(prevTotal)} → <span style="color:${color};font-weight:600;">${diff >= 0 ? '+' : ''}${fmt.shortWon(diff)} (${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%)</span>`;
       })()}</div>
+        <div class="kpi-card">
+      <div class="label">월 배송비 차감 마진 <span style="font-size:11px;color:var(--text-sub);font-weight:500;margin-left:6px;">단가는 🚚 패널에서 입력</span></div>
+      <div class="value">${fmt.shortWon(_netMargin_month)}</div>
+      <div class="sub">일 ${fmt.shortWon(_netMargin_today)}</div>
+    </div>
     </div>
   </div>`;
 
@@ -2021,6 +2118,17 @@ document.body.addEventListener('change', e => {
     showToast('광고비를 저장했습니다', 'success');
     return;
   }
+  // 배송비 단가 입력
+  const shipInp = e.target.closest('input[data-shipping-key]');
+  if (shipInp) {
+    const k = shipInp.dataset.shippingKey;
+    const v = shipInp.value;
+    if (v === '' || v === '0') localStorage.removeItem(k);
+    else localStorage.setItem(k, v);
+    render();
+    showToast('배송비 단가를 저장했습니다', 'success');
+    return;
+  }
 });
 document.body.addEventListener('keydown', e => {
   const inp = e.target.closest('input[data-goal-key]');
@@ -2580,7 +2688,7 @@ function buildSheet1(slot) {
 function buildListSheet(slot, currentDate) {
   // 정산월 / 발주월 / 적정재고 / 발주일 / 쇼핑몰 / 상품명 / 모델명 / 수량 / 구분 / 배송료 / 사은품 / 고객배송비
   // 매입단가(원가) / 매입가(합계) / 납품단가 / 납품가(합계) / 판매단가 / 판매가(합계) / 사은품 / 입금부대비용 / 지급부대비용 / 마진
-  const headers = ['정산월','발주월','적정재고','발주일','쇼핑몰','상품명','모델명','수량','구분','배송료','사은품','고객배송비','매입단가(원가)','매입가(합계)','납품단가','납품가(합계)','판매단가','판매가(합계)','사은품','입금부대비용','지급부대비용','마진'];
+  const headers = ['정산월','발주월','적정재고','발주일','쇼핑몰','상품명','모델명','수량','구분','배송료','사은품','고객배송비','매입단가(원가)','매입가(합계)','납품단가','납품가(합계)','판매단가','판매가(합계)','사은품','입금부대비용','지급부대비용','마진','배송비그룹','배송비단가','배송비차감마진'];
   const aoa = [headers];
 
   // 그 달의 모든 트랜잭션을 모음 (현재 일자뿐만 아니라 같은 달 전체)
@@ -2607,12 +2715,17 @@ function buildListSheet(slot, currentDate) {
       const cost = (t.cost_unit || 0) * qty;
       const margin = amount - cost;
       const unitPrice = qty !== 0 ? amount / qty : 0;
+      // 배송비 차감 마진 (주문에만 적용)
+      const shipGrp = (category === '주문') ? shippingGroupOf(t.model) : '';
+      const shipRate = shipGrp ? shippingRateOf(shipGrp) : 0;
+      const netMargin = (category === '주문') ? margin - shipRate : margin;
       aoa.push([
         null, monthYY, null, d, ch,
         t.desc || '', t.model || '',
         qty, category, null, null, null,
         t.cost_unit || 0, cost, unitPrice, amount, unitPrice, amount,
-        null, 0, 0, margin
+        null, 0, 0, margin,
+        shipGrp, shipRate, netMargin
       ]);
     });
   }
@@ -2621,7 +2734,8 @@ function buildListSheet(slot, currentDate) {
     {wch:8},{wch:8},{wch:8},{wch:11},{wch:14},{wch:50},{wch:18},
     {wch:6},{wch:8},{wch:8},{wch:8},{wch:10},
     {wch:12},{wch:13},{wch:12},{wch:13},{wch:12},{wch:13},
-    {wch:6},{wch:11},{wch:11},{wch:11}
+    {wch:6},{wch:11},{wch:11},{wch:11},
+    {wch:9},{wch:11},{wch:13}
   ];
   return borderAll(formatNumbers(ws));
 }
