@@ -705,22 +705,32 @@ function extractRackShippingCost(t) {
   return (t.cost_unit || 0) * (t.qty || 0);
 }
 
-// ─── 매칭 알고리즘: item_code 매핑 모델 → 같은 일자+쇼핑몰의 그 모델 라인 ───
+// ─── 매칭 알고리즘: item_code 매핑 모델 → 매핑 모델 라인 ───
+//   1순위: 같은 쇼핑몰 (정확)
+//   2순위: 같은 일자의 다른 쇼핑몰 (폴백 - DEL/상품이 다른 쇼핑몰로 입력된 경우 대비)
 function computeShippingMap(txns) {
   const map = new WeakMap();
   if (!txns || !txns.length) return map;
 
+  // 매핑 모델 후보 라인 수집 (반품/할인/0수량 제외)
+  const allRackProductLines = txns.filter(l => {
+    if (String(l.item_code || '').startsWith('DEL-')) return false;
+    if (/판매장려금/.test(String(l.group_name || ''))) return false;
+    if ((l.qty || 0) < 0) return false;
+    return isRackGroup(shippingGroupOf(l.model));
+  });
+
   txns.filter(isRackShippingFeeTxn).forEach(rd => {
     const info = shippingDelInfoOf(rd);
     if (!info || !info.models || info.models.length === 0) return;
-    // 같은 쇼핑몰 + 매핑된 모델 라인
-    const targets = txns.filter(l => {
-      if (String(l.item_code || '').startsWith('DEL-')) return false;
-      if (/판매장려금/.test(String(l.group_name || ''))) return false;
-      if ((l.qty || 0) < 0) return false;
-      if ((l.shop || '') !== (rd.shop || '')) return false;
-      return info.models.includes(l.model || '');
-    });
+    const matchModel = (l) => info.models.includes(l.model || '');
+    // 1순위: 같은 쇼핑몰
+    let targets = allRackProductLines.filter(l =>
+      (l.shop || '') === (rd.shop || '') && matchModel(l));
+    // 2순위 폴백: 다른 쇼핑몰
+    if (targets.length === 0) {
+      targets = allRackProductLines.filter(matchModel);
+    }
     if (targets.length === 0) return;  // 매칭 실패
     const cost = extractRackShippingCost(rd);
     const per = cost / targets.length;
@@ -777,10 +787,15 @@ function computeShippingBreakdown(currentDate, viewChannels, scope) {
       const txns = slot._transactions;
       const map = computeShippingMap(txns);
       // 전표 단위 그룹화 - 매칭/미매칭 검출용
-      // 새 매칭 알고리즘: 같은 일자+쇼핑몰 매핑 모델 매칭
+      // 매칭 알고리즘 (1순위 같은 쇼핑몰, 2순위 다른 쇼핑몰)
       const allRackDels = txns.filter(isRackShippingFeeTxn);
       const allLozenDels = txns.filter(isLozenShippingFeeTxn);
-      // 랙용 DEL: 매핑 모델 라인 검색
+      const rackProductLines = txns.filter(l => {
+        if (String(l.item_code || '').startsWith('DEL-')) return false;
+        if (/판매장려금/.test(String(l.group_name || ''))) return false;
+        if ((l.qty || 0) < 0) return false;
+        return isRackGroup(shippingGroupOf(l.model));
+      });
       allRackDels.forEach(rd => {
         const info = shippingDelInfoOf(rd);
         const cost = extractRackShippingCost(rd);
@@ -788,14 +803,10 @@ function computeShippingBreakdown(currentDate, viewChannels, scope) {
         result.del.sum += cost;
         let matched = false;
         if (info && info.models && info.models.length > 0) {
-          const targets = txns.filter(l => {
-            if (String(l.item_code || '').startsWith('DEL-')) return false;
-            if (/판매장려금/.test(String(l.group_name || ''))) return false;
-            if ((l.qty || 0) < 0) return false;
-            if ((l.shop || '') !== (rd.shop || '')) return false;
-            return info.models.includes(l.model || '');
-          });
-          matched = targets.length > 0;
+          const matchM = l => info.models.includes(l.model || '');
+          let t1 = rackProductLines.filter(l => (l.shop || '') === (rd.shop || '') && matchM(l));
+          let t2 = (t1.length === 0) ? rackProductLines.filter(matchM) : t1;
+          matched = t2.length > 0;
         }
         if (!matched) {
           result.unmatched.count += 1;
