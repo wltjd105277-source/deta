@@ -2404,15 +2404,15 @@ document.body.addEventListener('keydown', e => {
 document.getElementById('btnDlDetail').addEventListener('click', () => downloadExcel('detail'));
 document.getElementById('btnDlList').addEventListener('click', () => downloadExcel('list'));
 
-// 배송비 매칭 상태 엑셀 (2 시트: 매칭완료 / 매칭실패)
+// 배송비 매칭 - 매칭 실패 DEL의 unique 품명 리스트 다운로드 (수동 모델 매핑용)
 function downloadShippingMatchExcel() {
   if (!currentDate || !store[currentDate]) {
     showToast('현재 일자가 선택되지 않았습니다', 'error');
     return;
   }
   const month = currentDate.slice(0, 7);
-  const matchedRows = [];
-  const unmatchedRows = [];
+  // unique desc → { count, costSum } 집계 (매칭 실패 허브랙_택배 DEL만)
+  const descMap = new Map();
 
   const allCgs = Object.keys(store[currentDate] || {}).filter(cg =>
     store[currentDate][cg] && store[currentDate][cg]._source === '판매현황');
@@ -2437,73 +2437,41 @@ function downloadShippingMatchExcel() {
           if ((l.qty || 0) < 0) return false;
           return isRackGroup(shippingGroupOf(l.model));
         });
-        const delSum = rackDels.reduce((s, l) => s + extractRackShippingCost(l), 0);
-
-        if (rackLines.length > 0) {
-          const perLine = delSum / rackLines.length;
-          rackLines.forEach(rl => {
-            const lineMargin = (rl.amount || 0) - (rl.cost_unit || 0) * (rl.qty || 0);
-            const delDescs = rackDels.map(rd => rd.desc || '').filter(Boolean).join(' | ');
-            matchedRows.push([
-              d, rl.shop || '', rl.txn_id || '', rl.model || '',
-              shippingGroupOf(rl.model), rl.qty || 0, rl.amount || 0,
-              (rl.cost_unit || 0) * (rl.qty || 0), lineMargin, perLine,
-              lineMargin - perLine, delDescs,
-            ]);
-          });
-        } else {
-          rackDels.forEach(rd => {
-            const m = (rd.desc || '').match(/LS-[A-Z0-9\-()]+/);
-            const candidates = [];
-            for (const t2 of slot._transactions) {
-              if (t2 === rd) continue;
-              if (String(t2.item_code || '').startsWith('DEL-')) continue;
-              if ((t2.qty || 0) < 0) continue;
-              if (!isRackGroup(shippingGroupOf(t2.model))) continue;
-              if ((t2.shop || '') !== (rd.shop || '')) continue;
-              candidates.push(`${t2.model}(전표${t2.txn_id || '-'}, ${t2.qty}개)`);
-            }
-            unmatchedRows.push([
-              d, rd.shop || '', rd.txn_id || '', rd.desc || '',
-              m ? m[0] : '', extractRackShippingCost(rd),
-              candidates.length > 0 ? candidates.join(' | ') : '(없음)',
-            ]);
-          });
-        }
+        if (rackLines.length > 0) continue; // 매칭 완료된 건 제외
+        // 매칭 실패만 unique desc로 모음
+        rackDels.forEach(rd => {
+          const desc = rd.desc || '';
+          if (!desc) return;
+          if (!descMap.has(desc)) descMap.set(desc, { count: 0, costSum: 0 });
+          const v = descMap.get(desc);
+          v.count += 1;
+          v.costSum += extractRackShippingCost(rd);
+        });
       }
     }
   }
 
-  if (matchedRows.length === 0 && unmatchedRows.length === 0) {
-    showToast('배송비 매칭 데이터가 없습니다', 'error');
+  if (descMap.size === 0) {
+    showToast('매칭 실패한 품명이 없습니다', 'success');
     return;
   }
 
+  // 발생 횟수 desc 정렬
+  const rows = Array.from(descMap.entries())
+    .map(([desc, v]) => [desc, '', v.count, v.costSum])
+    .sort((a, b) => b[2] - a[2]);
+
+  const aoa = [
+    ['품명', '모델명 (직접 입력)', '발생횟수', '추출배송비합계'],
+    ...rows
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{wch:80},{wch:24},{wch:10},{wch:14}];
   const wb = XLSX.utils.book_new();
-  const m_aoa = [
-    ['발주일','쇼핑몰','전표','랙모델','그룹','수량','공급가','매입가합계','원래마진','분배된배송비','차감마진','매칭된DEL품명'],
-    ...matchedRows
-  ];
-  const ws_m = XLSX.utils.aoa_to_sheet(m_aoa);
-  ws_m['!cols'] = [
-    {wch:12},{wch:16},{wch:8},{wch:18},{wch:8},{wch:6},
-    {wch:11},{wch:13},{wch:11},{wch:13},{wch:11},{wch:60}
-  ];
-  XLSX.utils.book_append_sheet(wb, borderAll(formatNumbers(ws_m)), '매칭완료');
-
-  const u_aoa = [
-    ['발주일','쇼핑몰','전표','품명','추정모델(LS-)','추출배송비','같은날짜+쇼핑몰의 랙 라인 후보'],
-    ...unmatchedRows
-  ];
-  const ws_u = XLSX.utils.aoa_to_sheet(u_aoa);
-  ws_u['!cols'] = [
-    {wch:12},{wch:16},{wch:8},{wch:60},{wch:18},{wch:12},{wch:60}
-  ];
-  XLSX.utils.book_append_sheet(wb, borderAll(formatNumbers(ws_u)), '매칭실패');
-
+  XLSX.utils.book_append_sheet(wb, borderAll(formatNumbers(ws)), '매칭실패_품명');
   const dStr = currentDate.slice(2).replace(/-/g, '.');
-  XLSX.writeFile(wb, `랜스타_배송비매칭_${dStr}.xlsx`);
-  showToast(`매칭완료 ${matchedRows.length}건 / 매칭실패 ${unmatchedRows.length}건 다운로드 완료`, 'success');
+  XLSX.writeFile(wb, `랜스타_매칭실패품명_${dStr}.xlsx`);
+  showToast(`unique 품명 ${rows.length}개 다운로드 완료`, 'success');
 }
 
 function downloadExcel(kind) {
