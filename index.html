@@ -707,7 +707,8 @@ function extractRackShippingCost(t) {
 
 // ─── 매칭 알고리즘: item_code 매핑 모델 → 매핑 모델 라인 ───
 //   1순위: 같은 쇼핑몰 (정확)
-//   2순위: 같은 일자의 다른 쇼핑몰 (폴백 - DEL/상품이 다른 쇼핑몰로 입력된 경우 대비)
+//   2순위: 다른 쇼핑몰 (DEL/상품이 다른 쇼핑몰로 입력된 경우)
+//   * txns에 월 전체를 넘기면 자연스럽게 월간 매칭됨
 function computeShippingMap(txns) {
   const map = new WeakMap();
   if (!txns || !txns.length) return map;
@@ -743,6 +744,18 @@ function computeShippingMap(txns) {
   return map;
 }
 
+// 월 전체 트랜잭션을 합쳐서 매칭 (다른 일자의 매핑 모델까지 대상)
+//   currentDate까지의 (currentDate 포함) 같은 cg의 모든 트랜잭션 통합
+function computeMonthShippingMap(currentDate, cg) {
+  const month = currentDate.slice(0, 7);
+  const allTxns = [];
+  Object.keys(store).filter(d => d.startsWith(month) && d <= currentDate).sort().forEach(d => {
+    const slot = store[d] && store[d][cg];
+    if (slot && slot._transactions) allTxns.push(...slot._transactions);
+  });
+  return computeShippingMap(allTxns);
+}
+
 // 트랜잭션 1건의 "배송비 차감 마진"
 function txnNetMargin(t, shippingMap) {
   const margin = (t.amount || 0) - (t.cost_unit || 0) * (t.qty || 0);
@@ -756,9 +769,13 @@ function txnNetMargin(t, shippingMap) {
 }
 
 // 슬롯의 트랜잭션 전체에 대한 일/월 net margin 합산
+//   slot 그날의 합계지만, shippingMap은 월 단위로 매칭 (cross-day fallback)
 function computeNetMargin(slot) {
   const txns = slot._transactions || [];
-  const map = computeShippingMap(txns);
+  const cg = slot.channel || (slot._source === '판매현황' ? Object.keys(store[slot.upload_date] || {}).find(c => store[slot.upload_date][c] === slot) : null);
+  const map = (cg && slot.upload_date)
+    ? computeMonthShippingMap(slot.upload_date, cg)
+    : computeShippingMap(txns);
   return txns.reduce((sum, t) => sum + txnNetMargin(t, map), 0);
 }
 
@@ -787,15 +804,24 @@ function computeShippingBreakdown(currentDate, viewChannels, scope) {
       const txns = slot._transactions;
       const map = computeShippingMap(txns);
       // 전표 단위 그룹화 - 매칭/미매칭 검출용
-      // 매칭 알고리즘 (1순위 같은 쇼핑몰, 2순위 다른 쇼핑몰)
+      // 매칭 알고리즘 (1순위 같은 쇼핑몰, 2순위 다른 쇼핑몰, 3순위 월 단위 cross-day)
       const allRackDels = txns.filter(isRackShippingFeeTxn);
       const allLozenDels = txns.filter(isLozenShippingFeeTxn);
-      const rackProductLines = txns.filter(l => {
-        if (String(l.item_code || '').startsWith('DEL-')) return false;
-        if (/판매장려금/.test(String(l.group_name || ''))) return false;
-        if ((l.qty || 0) < 0) return false;
-        return isRackGroup(shippingGroupOf(l.model));
-      });
+      // 월 단위 모든 랙 상품 라인 (cross-day fallback)
+      const monthRackLines = (() => {
+        const ml = [];
+        Object.keys(store).filter(dd => dd.startsWith(month) && dd <= currentDate).forEach(dd => {
+          const sl = store[dd] && store[dd][cg];
+          if (!sl || !sl._transactions) return;
+          sl._transactions.forEach(l => {
+            if (String(l.item_code || '').startsWith('DEL-')) return;
+            if (/판매장려금/.test(String(l.group_name || ''))) return;
+            if ((l.qty || 0) < 0) return;
+            if (isRackGroup(shippingGroupOf(l.model))) ml.push(l);
+          });
+        });
+        return ml;
+      })();
       allRackDels.forEach(rd => {
         const info = shippingDelInfoOf(rd);
         const cost = extractRackShippingCost(rd);
@@ -804,8 +830,8 @@ function computeShippingBreakdown(currentDate, viewChannels, scope) {
         let matched = false;
         if (info && info.models && info.models.length > 0) {
           const matchM = l => info.models.includes(l.model || '');
-          let t1 = rackProductLines.filter(l => (l.shop || '') === (rd.shop || '') && matchM(l));
-          let t2 = (t1.length === 0) ? rackProductLines.filter(matchM) : t1;
+          let t1 = monthRackLines.filter(l => (l.shop || '') === (rd.shop || '') && matchM(l));
+          let t2 = (t1.length === 0) ? monthRackLines.filter(matchM) : t1;
           matched = t2.length > 0;
         }
         if (!matched) {
@@ -846,12 +872,13 @@ function computeShippingBreakdown(currentDate, viewChannels, scope) {
 }
 function computeMonthNetMargin(currentDate, cg) {
   const month = currentDate.slice(0, 7);
+  // 월 단위 매핑 (cross-day fallback)
+  const map = computeMonthShippingMap(currentDate, cg);
   let total = 0;
   for (const d of Object.keys(store)) {
     if (!d.startsWith(month) || d > currentDate) continue;
     const s = store[d] && store[d][cg];
     if (!s || !s._transactions) continue;
-    const map = computeShippingMap(s._transactions);
     s._transactions.forEach(t => total += txnNetMargin(t, map));
   }
   return total;
