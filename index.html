@@ -670,8 +670,10 @@ function computeShippingMap(txns) {
   });
   for (const key of Object.keys(byTicket)) {
     const lines = byTicket[key];
-    // 같은 전표의 '허브랙_택배' DEL-매출배송료 합계 (일반 '택배'는 제외)
-    const delSum = lines.filter(isRackShippingFeeTxn).reduce((s, l) => s + (l.amount || 0), 0);
+    // 같은 전표의 '허브랙_택배' DEL-매출배송료 매입가합계 (공급가는 0인 경우 多)
+    // = 셀러가 실제 지출한 배송비
+    const delSum = lines.filter(isRackShippingFeeTxn).reduce(
+      (s, l) => s + ((l.cost_unit || 0) * (l.qty || 0)), 0);
     // 랙 라인들 (반품/0수량 제외)
     const rackLines = lines.filter(l => {
       if (String(l.item_code || '').startsWith('DEL-')) return false;
@@ -751,7 +753,9 @@ function computeShippingBreakdown(currentDate, viewChannels, scope) {
           return isRackGroup(shippingGroupOf(l.model));
         });
         if (rackDels.length > 0) {
-          const rackDelSum = rackDels.reduce((s,l) => s + (l.amount || 0), 0);
+          // 매입가합계 = cost_unit * qty (셀러 실제 지출)
+          const rackDelSum = rackDels.reduce(
+            (s,l) => s + ((l.cost_unit || 0) * (l.qty || 0)), 0);
           result.del.count += rackDels.length;
           result.del.sum += rackDelSum;
           if (rackLines.length === 0) {
@@ -763,7 +767,8 @@ function computeShippingBreakdown(currentDate, viewChannels, scope) {
         if (lozenDels.length > 0) {
           result.lozenDel = result.lozenDel || { count: 0, sum: 0 };
           result.lozenDel.count += lozenDels.length;
-          result.lozenDel.sum += lozenDels.reduce((s,l) => s + (l.amount || 0), 0);
+          result.lozenDel.sum += lozenDels.reduce(
+            (s,l) => s + ((l.cost_unit || 0) * (l.qty || 0)), 0);
         }
       }
       // 그룹별 카운트/합계
@@ -1569,7 +1574,7 @@ function render() {
             <td style="padding:8px 10px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;font-size:12px;">${fmt.won(_shipMonth.del.sum)}</td>
             <td style="padding:8px 10px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;font-size:12px;">${_shipToday.del.count.toLocaleString()}건</td>
             <td style="padding:8px 10px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;font-size:12px;">${fmt.won(_shipToday.del.sum)}</td>
-            <td style="padding:8px 10px;border:1px solid var(--border);font-size:11px;color:var(--text-sub);">랙 분배에 사용되는 배송료 매출</td>
+            <td style="padding:8px 10px;border:1px solid var(--border);font-size:11px;color:var(--text-sub);">랙 분배에 사용되는 매입가합계 (실제 지출)</td>
           </tr>
           <tr>
             <td style="padding:8px 10px;border:1px solid var(--border);font-size:12px;color:var(--text-sub);">참고: DEL-택배 (로젠)</td>
@@ -1577,7 +1582,7 @@ function render() {
             <td style="padding:8px 10px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;font-size:12px;">${fmt.won(_shipMonth.lozenDel?.sum || 0)}</td>
             <td style="padding:8px 10px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;font-size:12px;">${(_shipToday.lozenDel?.count || 0).toLocaleString()}건</td>
             <td style="padding:8px 10px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;font-size:12px;">${fmt.won(_shipToday.lozenDel?.sum || 0)}</td>
-            <td style="padding:8px 10px;border:1px solid var(--border);font-size:11px;color:var(--text-sub);">로젠택배 매출 (분배 안 함, ERP 마진에 이미 반영)</td>
+            <td style="padding:8px 10px;border:1px solid var(--border);font-size:11px;color:var(--text-sub);">로젠택배 매입가합계 (분배 안 함, ERP 마진에 이미 반영)</td>
           </tr>
           ${_shipMonth.unmatched.count > 0 ? `
           <tr style="background:#fff7ed;">
