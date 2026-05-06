@@ -940,8 +940,7 @@ function processShippingMapFile(filename, wb) {
     if (!code.startsWith('DEL-')) continue;
 
     // 모델 리스트 (콤마 분리, 공백/개행 trim)
-    const models = modelStr.split(/[,
-]/).map(s => s.trim()).filter(Boolean)
+    const models = modelStr.split(/[,\n]/).map(s => s.trim()).filter(Boolean)
       .map(m => m.startsWith('LS-') ? m : `LS-${m}`);  // LS- 누락 시 자동 보정
 
     // 그룹 판별: 품목명에 '서버랙'이 있으면 서버랙, '로젠택배 N원'만 있고 경동 없으면 로젠택배, 그 외 허브랙
