@@ -2384,13 +2384,14 @@ document.body.addEventListener('change', e => {
     showToast('광고비를 저장했습니다', 'success');
     return;
   }
-  // 배송비 매칭 상태 엑셀 다운로드
+});
+// 배송비 매칭 상태 엑셀 다운로드 (click 이벤트, 위임)
+document.body.addEventListener('click', e => {
   const dlMatch = e.target.closest('button[data-dl-shipping-match]');
   if (dlMatch) {
     e.preventDefault();
     e.stopPropagation();
     downloadShippingMatchExcel();
-    return;
   }
 });
 document.body.addEventListener('keydown', e => {
