@@ -886,7 +886,7 @@ function computeShippingBreakdown(currentDate, viewChannels, scope) {
       allRackDels.forEach(rd => {
         const info = shippingDelInfoOf(rd);
         const cost = extractRackShippingCost(rd);
-        result.del.count += 1;
+        result.del.count += (rd.qty || 0);  // qty 합계
         result.del.sum += cost;
         let matched = false;
         let reason = '매핑정보없음';
@@ -904,7 +904,7 @@ function computeShippingBreakdown(currentDate, viewChannels, scope) {
           reason = '품목코드 ' + (rd.item_code || '?') + ' 매핑에 없음 - 매핑 xlsx 확인 필요';
         }
         if (!matched) {
-          result.unmatched.count += 1;
+          result.unmatched.count += (rd.qty || 0);  // qty 합계
           result.unmatched.sum += cost;
           result.unmatchedList.push({
             date: d,
@@ -918,14 +918,14 @@ function computeShippingBreakdown(currentDate, viewChannels, scope) {
           });
         }
       });
-      // 로젠택배 DEL: 참고용 합계
+      // 로젠택배 DEL: 참고용 합계 (수량 합계 기준)
       if (allLozenDels.length > 0) {
         result.lozenDel = result.lozenDel || { count: 0, sum: 0 };
-        result.lozenDel.count += allLozenDels.length;
+        result.lozenDel.count += allLozenDels.reduce((s,l) => s + (l.qty || 0), 0);  // qty 합계
         result.lozenDel.sum += allLozenDels.reduce(
           (s,l) => s + ((l.cost_unit || 0) * (l.qty || 0)), 0);
       }
-      // 그룹별 카운트/합계
+      // 그룹별 카운트(수량 합계)/합계
       txns.forEach(t => {
         if (String(t.item_code || '').startsWith('DEL-')) return;
         if (/판매장려금/.test(String(t.group_name || ''))) return;
@@ -933,7 +933,7 @@ function computeShippingBreakdown(currentDate, viewChannels, scope) {
         const g = shippingGroupOf(t.model);
         const ship = map.get(t) || 0;
         if (result[g]) {
-          result[g].count += 1;
+          result[g].count += (t.qty || 0);  // qty 합계
           result[g].sum += ship;
         }
       });
@@ -1790,9 +1790,9 @@ function render() {
         <thead>
           <tr style="background:var(--bg-sub);">
             <th style="padding:8px 10px;text-align:left;border:1px solid var(--border);">그룹</th>
-            <th style="padding:8px 10px;text-align:right;border:1px solid var(--border);">월 트랜잭션</th>
+            <th style="padding:8px 10px;text-align:right;border:1px solid var(--border);">월 수량(건)</th>
             <th style="padding:8px 10px;text-align:right;border:1px solid var(--border);">월 배송비 합계</th>
-            <th style="padding:8px 10px;text-align:right;border:1px solid var(--border);">일 트랜잭션</th>
+            <th style="padding:8px 10px;text-align:right;border:1px solid var(--border);">일 수량(건)</th>
             <th style="padding:8px 10px;text-align:right;border:1px solid var(--border);">일 배송비 합계</th>
             <th style="padding:8px 10px;text-align:left;border:1px solid var(--border);">설명</th>
           </tr>
