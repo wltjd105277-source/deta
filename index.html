@@ -2298,7 +2298,7 @@ function buildProductTable(products, sortBy, period, sortDir, prevProds) {
         ${sorted.map((p, i) => {
           const share = totalRev > 0 ? (p.revenue_amount / totalRev * 100).toFixed(1) + '%' : '-';
           const margin = (p.revenue_amount || 0) - (p.cost_amount || 0);
-          return `<tr>
+          return `<tr data-product-row="${encodeURIComponent(p.name)}" data-product-period="${period}" style="cursor:pointer;" title="클릭해서 채널별 상세 보기">
             <td>${i+1}</td>
             <td>${p.name}</td>
             <td class="num">${fmt.num(p.qty)}</td>
@@ -2618,6 +2618,127 @@ document.body.addEventListener('change', e => {
     return;
   }
 });
+
+// 상품 행 클릭 → 채널별 분포 모달
+document.body.addEventListener('click', e => {
+  const row = e.target.closest('tr[data-product-row]');
+  if (!row) return;
+  // 매칭 다운로드 버튼이나 다른 버튼 클릭 무시
+  if (e.target.tagName === 'BUTTON' || e.target.closest('button')) return;
+  const productName = decodeURIComponent(row.dataset.productRow);
+  const period = row.dataset.productPeriod || 'monthly';
+  showProductChannelBreakdown(productName, period);
+});
+
+function showProductChannelBreakdown(productName, period) {
+  if (!currentDate) return;
+  // 데이터 수집: 그 상품의 채널별 (qty, revenue, cost, margin, txnCount) 분포
+  const month = currentDate.slice(0, 7);
+  const isMonthly = period === 'monthly';
+  const channelMap = {};  // {channel: {qty, revenue, cost, margin, txnCount}}
+
+  const allCgs = Object.keys(store[currentDate] || {}).filter(cg =>
+    store[currentDate][cg] && store[currentDate][cg]._source === '판매현황');
+  for (const cg of allCgs) {
+    const dates = isMonthly
+      ? Object.keys(store).filter(d => d.startsWith(month) && d <= currentDate)
+      : [currentDate];
+    for (const d of dates) {
+      const slot = store[d] && store[d][cg];
+      if (!slot || !slot._transactions) continue;
+      slot._transactions.forEach(t => {
+        if (t.model !== productName) return;
+        if (String(t.item_code || '').startsWith('DEL-')) return;
+        if (/판매장려금/.test(String(t.group_name || ''))) return;
+        const ch = channelMap_get(t.shop);
+        if (!channelMap[ch]) channelMap[ch] = { qty:0, revenue:0, cost:0, margin:0, txnCount:0 };
+        const c = channelMap[ch];
+        c.qty += t.qty || 0;
+        c.revenue += t.amount || 0;
+        c.cost += (t.cost_unit || 0) * (t.qty || 0);
+        c.margin += (t.amount || 0) - (t.cost_unit || 0) * (t.qty || 0);
+        c.txnCount += 1;
+      });
+    }
+  }
+
+  const rows = Object.entries(channelMap)
+    .map(([channel, v]) => ({ channel, ...v }))
+    .sort((a, b) => b.revenue - a.revenue);
+
+  if (rows.length === 0) {
+    showToast(`${productName}: 데이터가 없습니다`, 'info');
+    return;
+  }
+
+  const totalQty = rows.reduce((s, r) => s + r.qty, 0);
+  const totalRev = rows.reduce((s, r) => s + r.revenue, 0);
+  const totalMargin = rows.reduce((s, r) => s + r.margin, 0);
+
+  // 모달 HTML
+  const modal = document.createElement('div');
+  modal.className = 'product-channel-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;';
+  modal.innerHTML = `
+    <div style="background:white;border-radius:12px;max-width:720px;width:100%;max-height:80vh;overflow:auto;box-shadow:0 10px 30px rgba(0,0,0,0.2);">
+      <div style="padding:18px 22px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;">
+        <div>
+          <div style="font-size:11px;color:var(--text-sub);">${isMonthly ? '월간' : '일일'} 채널별 분포</div>
+          <div style="font-size:16px;font-weight:700;margin-top:2px;">${productName}</div>
+        </div>
+        <button class="modal-close-btn" style="background:transparent;border:none;font-size:20px;cursor:pointer;color:var(--text-sub);width:32px;height:32px;border-radius:6px;">×</button>
+      </div>
+      <div style="padding:18px 22px;">
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+          <thead>
+            <tr style="background:var(--bg-sub);">
+              <th style="padding:10px 12px;text-align:left;border:1px solid var(--border);">쇼핑몰</th>
+              <th style="padding:10px 12px;text-align:right;border:1px solid var(--border);">수량</th>
+              <th style="padding:10px 12px;text-align:right;border:1px solid var(--border);">매출 (납품가)</th>
+              <th style="padding:10px 12px;text-align:right;border:1px solid var(--border);">비중</th>
+              <th style="padding:10px 12px;text-align:right;border:1px solid var(--border);">마진</th>
+              <th style="padding:10px 12px;text-align:right;border:1px solid var(--border);">트랜잭션</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map(r => {
+              const share = totalRev > 0 ? (r.revenue / totalRev * 100).toFixed(1) + '%' : '-';
+              const marginColor = r.margin >= 0 ? 'var(--success)' : 'var(--danger)';
+              return `<tr>
+                <td style="padding:10px 12px;border:1px solid var(--border);font-weight:600;">${r.channel}</td>
+                <td style="padding:10px 12px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;">${fmt.num(r.qty)}</td>
+                <td style="padding:10px 12px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;">${fmt.won(r.revenue)}</td>
+                <td style="padding:10px 12px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;">${share}</td>
+                <td style="padding:10px 12px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;color:${marginColor};">${fmt.won(r.margin)}</td>
+                <td style="padding:10px 12px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;color:var(--text-sub);">${r.txnCount}건</td>
+              </tr>`;
+            }).join('')}
+            <tr style="background:var(--bg-sub);font-weight:700;">
+              <td style="padding:10px 12px;border:1px solid var(--border);">합계</td>
+              <td style="padding:10px 12px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;">${fmt.num(totalQty)}</td>
+              <td style="padding:10px 12px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;">${fmt.won(totalRev)}</td>
+              <td style="padding:10px 12px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;">100.0%</td>
+              <td style="padding:10px 12px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;color:${totalMargin >= 0 ? 'var(--success)' : 'var(--danger)'};">${fmt.won(totalMargin)}</td>
+              <td style="padding:10px 12px;text-align:right;border:1px solid var(--border);"></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  // 닫기: × 버튼 또는 배경 클릭
+  modal.addEventListener('click', evt => {
+    if (evt.target === modal || evt.target.closest('.modal-close-btn')) {
+      modal.remove();
+    }
+  });
+}
+
+// channelMap 함수와 이름 충돌 방지용 alias (channelMap은 함수명이라 변수로 못씀)
+function channelMap_get(shop) {
+  return channelMap(shop);
+}
 // 배송비 매칭 상태 엑셀 다운로드 (click 이벤트, 위임)
 document.body.addEventListener('click', e => {
   const dlMatch = e.target.closest('button[data-dl-shipping-match]');
