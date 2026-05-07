@@ -925,16 +925,23 @@ function computeShippingBreakdown(currentDate, viewChannels, scope) {
         result.lozenDel.sum += allLozenDels.reduce(
           (s,l) => s + ((l.cost_unit || 0) * (l.qty || 0)), 0);
       }
-      // 그룹별 카운트(수량 합계)/합계
+      // 그룹별 카운트/합계 - DEL 트랜잭션 단위로 통일 (합계 랙 == DEL-허브랙_택배 일치)
+      //   허브랙/서버랙 그룹의 DEL 수량 합과 cost(택배비) 합으로 표시
+      allRackDels.forEach(rd => {
+        const info = shippingDelInfoOf(rd);
+        if (info && (info.group === '허브랙' || info.group === '서버랙')) {
+          result[info.group].count += (rd.qty || 0);
+          result[info.group].sum += extractRackShippingCost(rd);
+        }
+      });
+      // 로젠택배 그룹 카운트 (참고용 - 일반 상품 매출 수량 표시)
       txns.forEach(t => {
         if (String(t.item_code || '').startsWith('DEL-')) return;
         if (/판매장려금/.test(String(t.group_name || ''))) return;
         if ((t.qty || 0) < 0) return;
         const g = shippingGroupOf(t.model);
-        const ship = map.get(t) || 0;
-        if (result[g]) {
-          result[g].count += (t.qty || 0);  // qty 합계
-          result[g].sum += ship;
+        if (g === '로젠택배' && result['로젠택배']) {
+          result['로젠택배'].count += (t.qty || 0);
         }
       });
     }
