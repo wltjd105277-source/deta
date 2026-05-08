@@ -2632,16 +2632,15 @@ document.body.addEventListener('click', e => {
 
 function showProductChannelBreakdown(productName, period) {
   if (!currentDate) return;
-  // 데이터 수집: 그 상품의 채널별 (qty, revenue, cost, margin, txnCount) 분포
   const month = currentDate.slice(0, 7);
   const isMonthly = period === 'monthly';
-  const channelMap = {};  // {channel: {qty, revenue, cost, margin, txnCount}}
+  const channelMap = {};
 
   const allCgs = Object.keys(store[currentDate] || {}).filter(cg =>
     store[currentDate][cg] && store[currentDate][cg]._source === '판매현황');
   for (const cg of allCgs) {
     const dates = isMonthly
-      ? Object.keys(store).filter(d => d.startsWith(month) && d <= currentDate)
+      ? Object.keys(store).filter(d => d.startsWith(month) && d <= currentDate).sort()
       : [currentDate];
     for (const d of dates) {
       const slot = store[d] && store[d][cg];
@@ -2651,13 +2650,20 @@ function showProductChannelBreakdown(productName, period) {
         if (String(t.item_code || '').startsWith('DEL-')) return;
         if (/판매장려금/.test(String(t.group_name || ''))) return;
         const ch = channelMap_get(t.shop);
-        if (!channelMap[ch]) channelMap[ch] = { qty:0, revenue:0, cost:0, margin:0, txnCount:0 };
+        if (!channelMap[ch]) channelMap[ch] = { qty:0, revenue:0, cost:0, margin:0, txnCount:0, txns:[] };
         const c = channelMap[ch];
+        const txnMargin = (t.amount || 0) - (t.cost_unit || 0) * (t.qty || 0);
         c.qty += t.qty || 0;
         c.revenue += t.amount || 0;
         c.cost += (t.cost_unit || 0) * (t.qty || 0);
-        c.margin += (t.amount || 0) - (t.cost_unit || 0) * (t.qty || 0);
+        c.margin += txnMargin;
         c.txnCount += 1;
+        c.txns.push({
+          date: d, txn_id: t.txn_id || '', shop: t.shop || '',
+          qty: t.qty || 0, amount: t.amount || 0,
+          cost: (t.cost_unit || 0) * (t.qty || 0),
+          margin: txnMargin,
+        });
       });
     }
   }
@@ -2665,25 +2671,22 @@ function showProductChannelBreakdown(productName, period) {
   const rows = Object.entries(channelMap)
     .map(([channel, v]) => ({ channel, ...v }))
     .sort((a, b) => b.revenue - a.revenue);
-
   if (rows.length === 0) {
     showToast(`${productName}: 데이터가 없습니다`, 'info');
     return;
   }
-
   const totalQty = rows.reduce((s, r) => s + r.qty, 0);
   const totalRev = rows.reduce((s, r) => s + r.revenue, 0);
   const totalMargin = rows.reduce((s, r) => s + r.margin, 0);
 
-  // 모달 HTML
   const modal = document.createElement('div');
   modal.className = 'product-channel-modal';
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;';
   modal.innerHTML = `
-    <div style="background:white;border-radius:12px;max-width:720px;width:100%;max-height:80vh;overflow:auto;box-shadow:0 10px 30px rgba(0,0,0,0.2);">
-      <div style="padding:18px 22px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;">
+    <div style="background:white;border-radius:12px;max-width:900px;width:100%;max-height:85vh;overflow:auto;box-shadow:0 10px 30px rgba(0,0,0,0.2);">
+      <div style="padding:18px 22px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:white;z-index:2;">
         <div>
-          <div style="font-size:11px;color:var(--text-sub);">${isMonthly ? '월간' : '일일'} 채널별 분포</div>
+          <div style="font-size:11px;color:var(--text-sub);">${isMonthly ? '월간' : '일일'} 채널별 분포 — 채널 행을 클릭하면 트랜잭션 상세 펼침</div>
           <div style="font-size:16px;font-weight:700;margin-top:2px;">${productName}</div>
         </div>
         <button class="modal-close-btn" style="background:transparent;border:none;font-size:20px;cursor:pointer;color:var(--text-sub);width:32px;height:32px;border-radius:6px;">×</button>
@@ -2701,16 +2704,49 @@ function showProductChannelBreakdown(productName, period) {
             </tr>
           </thead>
           <tbody>
-            ${rows.map(r => {
+            ${rows.map((r, idx) => {
               const share = totalRev > 0 ? (r.revenue / totalRev * 100).toFixed(1) + '%' : '-';
               const marginColor = r.margin >= 0 ? 'var(--success)' : 'var(--danger)';
-              return `<tr>
-                <td style="padding:10px 12px;border:1px solid var(--border);font-weight:600;">${r.channel}</td>
+              const txnsRows = r.txns
+                .sort((a,b) => a.date.localeCompare(b.date) || (a.txn_id||'').localeCompare(b.txn_id||''))
+                .map(t => `<tr>
+                  <td style="padding:6px 10px;border:1px solid var(--border);font-variant-numeric:tabular-nums;font-size:11px;">${t.date}</td>
+                  <td style="padding:6px 10px;border:1px solid var(--border);font-variant-numeric:tabular-nums;font-size:11px;color:var(--text-sub);">${t.txn_id || '-'}</td>
+                  <td style="padding:6px 10px;border:1px solid var(--border);font-size:11px;">${t.shop}</td>
+                  <td style="padding:6px 10px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;font-size:11px;">${fmt.num(t.qty)}</td>
+                  <td style="padding:6px 10px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;font-size:11px;">${fmt.won(t.amount)}</td>
+                  <td style="padding:6px 10px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;font-size:11px;">${fmt.won(t.cost)}</td>
+                  <td style="padding:6px 10px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;font-size:11px;color:${t.margin >= 0 ? 'var(--success)' : 'var(--danger)'};">${fmt.won(t.margin)}</td>
+                </tr>`).join('');
+              return `
+              <tr data-channel-row="${idx}" style="cursor:pointer;" title="클릭해서 트랜잭션 상세 펼치기">
+                <td style="padding:10px 12px;border:1px solid var(--border);font-weight:600;">▸ ${r.channel}</td>
                 <td style="padding:10px 12px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;">${fmt.num(r.qty)}</td>
                 <td style="padding:10px 12px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;">${fmt.won(r.revenue)}</td>
                 <td style="padding:10px 12px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;">${share}</td>
                 <td style="padding:10px 12px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;color:${marginColor};">${fmt.won(r.margin)}</td>
                 <td style="padding:10px 12px;text-align:right;border:1px solid var(--border);font-variant-numeric:tabular-nums;color:var(--text-sub);">${r.txnCount}건</td>
+              </tr>
+              <tr data-channel-detail="${idx}" style="display:none;">
+                <td colspan="6" style="padding:0;border:1px solid var(--border);background:#f9fafb;">
+                  <div style="padding:10px 14px;">
+                    <div style="font-size:11px;color:var(--text-sub);margin-bottom:6px;">${r.channel} 트랜잭션 ${r.txnCount}건</div>
+                    <table style="width:100%;border-collapse:collapse;">
+                      <thead>
+                        <tr style="background:white;">
+                          <th style="padding:6px 10px;text-align:left;border:1px solid var(--border);font-size:11px;">발주일</th>
+                          <th style="padding:6px 10px;text-align:left;border:1px solid var(--border);font-size:11px;">전표</th>
+                          <th style="padding:6px 10px;text-align:left;border:1px solid var(--border);font-size:11px;">판매처(상세)</th>
+                          <th style="padding:6px 10px;text-align:right;border:1px solid var(--border);font-size:11px;">수량</th>
+                          <th style="padding:6px 10px;text-align:right;border:1px solid var(--border);font-size:11px;">매출</th>
+                          <th style="padding:6px 10px;text-align:right;border:1px solid var(--border);font-size:11px;">매입가</th>
+                          <th style="padding:6px 10px;text-align:right;border:1px solid var(--border);font-size:11px;">마진</th>
+                        </tr>
+                      </thead>
+                      <tbody>${txnsRows}</tbody>
+                    </table>
+                  </div>
+                </td>
               </tr>`;
             }).join('')}
             <tr style="background:var(--bg-sub);font-weight:700;">
@@ -2727,10 +2763,24 @@ function showProductChannelBreakdown(productName, period) {
     </div>
   `;
   document.body.appendChild(modal);
-  // 닫기: × 버튼 또는 배경 클릭
+
   modal.addEventListener('click', evt => {
     if (evt.target === modal || evt.target.closest('.modal-close-btn')) {
       modal.remove();
+      return;
+    }
+    const chRow = evt.target.closest('tr[data-channel-row]');
+    if (chRow) {
+      const idx = chRow.dataset.channelRow;
+      const detail = modal.querySelector(`tr[data-channel-detail="${idx}"]`);
+      if (detail) {
+        const isOpen = detail.style.display !== 'none';
+        detail.style.display = isOpen ? 'none' : '';
+        const firstTd = chRow.querySelector('td');
+        if (firstTd) {
+          firstTd.innerHTML = firstTd.innerHTML.replace(/^[▸▾]\s/, isOpen ? '▸ ' : '▾ ');
+        }
+      }
     }
   });
 }
