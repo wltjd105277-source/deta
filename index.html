@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>랜스타 일별 매출 리포트</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -451,16 +452,53 @@ let store = loadStore();
 let currentDate = null;
 let currentChannel = 'all'; // 'all' | '쿠팡' | '샵N'
 
+// store 영속화 - lz-string 압축 사용 (localStorage 5MB 한도 회피)
+//   기존 비압축 데이터도 자동 마이그레이션
 function loadStore() {
   try {
+    // 압축 버전 우선 시도
+    const compressed = localStorage.getItem(STORE_KEY + '_z');
+    if (compressed && typeof LZString !== 'undefined') {
+      const json = LZString.decompressFromUTF16(compressed);
+      if (json) return JSON.parse(json);
+    }
+    // 폴백: 기존 비압축 데이터 (자동 마이그레이션)
     const raw = localStorage.getItem(STORE_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch(e) { return {}; }
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      // 다음 saveStore 시 자동으로 압축 키로 이동됨
+      return parsed;
+    }
+    return {};
+  } catch(e) {
+    console.error('loadStore failed:', e);
+    return {};
+  }
 }
+
 function saveStore() {
   try {
-    localStorage.setItem(STORE_KEY, JSON.stringify(store));
-  } catch(e) { showToast('저장 공간이 부족합니다', 'error'); }
+    const json = JSON.stringify(store);
+    if (typeof LZString === 'undefined') {
+      // lz-string 미로드 시 비압축 (폴백)
+      localStorage.setItem(STORE_KEY, json);
+      return;
+    }
+    const compressed = LZString.compressToUTF16(json);
+    localStorage.setItem(STORE_KEY + '_z', compressed);
+    // 비압축 키 정리 (마이그레이션 완료)
+    localStorage.removeItem(STORE_KEY);
+    // 진단: 데이터 사이즈 콘솔에 표시
+    if (window.__storeDebug) {
+      const ratio = ((1 - compressed.length / json.length) * 100).toFixed(1);
+      console.log(`[saveStore] raw ${(json.length/1024).toFixed(1)}KB → 압축 ${(compressed.length/1024).toFixed(1)}KB (${ratio}% 감소)`);
+    }
+  } catch(e) {
+    console.error('saveStore failed:', e);
+    // 명확한 알림 (토스트 + alert)
+    showToast('⚠ 저장 실패! 콘솔(F12) 확인 필요', 'error');
+    setTimeout(() => alert(`데이터 저장에 실패했습니다.\n\n원인: ${e.message}\n\n브라우저 저장 공간이 가득 찼을 수 있습니다.\n오래된 데이터를 정리하거나 다른 브라우저를 시도하세요.`), 100);
+  }
 }
 
 function showToast(msg, type='') {
