@@ -6,6 +6,7 @@
 <title>랜스타 일별 매출 리포트</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -480,26 +481,149 @@ function saveStore() {
   try {
     const json = JSON.stringify(store);
     if (typeof LZString === 'undefined') {
-      // lz-string 미로드 시 비압축 (폴백)
       localStorage.setItem(STORE_KEY, json);
-      return;
+    } else {
+      const compressed = LZString.compressToUTF16(json);
+      localStorage.setItem(STORE_KEY + '_z', compressed);
+      localStorage.removeItem(STORE_KEY);
+      if (window.__storeDebug) {
+        const ratio = ((1 - compressed.length / json.length) * 100).toFixed(1);
+        console.log(`[saveStore] raw ${(json.length/1024).toFixed(1)}KB → 압축 ${(compressed.length/1024).toFixed(1)}KB (${ratio}% 감소)`);
+      }
     }
-    const compressed = LZString.compressToUTF16(json);
-    localStorage.setItem(STORE_KEY + '_z', compressed);
-    // 비압축 키 정리 (마이그레이션 완료)
-    localStorage.removeItem(STORE_KEY);
-    // 진단: 데이터 사이즈 콘솔에 표시
-    if (window.__storeDebug) {
-      const ratio = ((1 - compressed.length / json.length) * 100).toFixed(1);
-      console.log(`[saveStore] raw ${(json.length/1024).toFixed(1)}KB → 압축 ${(compressed.length/1024).toFixed(1)}KB (${ratio}% 감소)`);
-    }
+    // Supabase 동기화 (비동기, 실패해도 localStorage는 저장됨)
+    syncStoreToSupabase();
   } catch(e) {
     console.error('saveStore failed:', e);
-    // 명확한 알림 (토스트 + alert)
     showToast('⚠ 저장 실패! 콘솔(F12) 확인 필요', 'error');
-    setTimeout(() => alert(`데이터 저장에 실패했습니다.\n\n원인: ${e.message}\n\n브라우저 저장 공간이 가득 찼을 수 있습니다.\n오래된 데이터를 정리하거나 다른 브라우저를 시도하세요.`), 100);
+    setTimeout(() => alert(`데이터 저장에 실패했습니다.\n\n원인: ${e.message}\n\n브라우저 저장 공간이 가득 찼을 수 있습니다.`), 100);
   }
 }
+
+// ────────── Supabase 동기화 (회사 다인 공유용) ──────────
+const SUPABASE_URL = 'https://fnbwexkqanrnziqjgkqq.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_GpRnNXVjaiLi8FW3tqYF-A_QoJbCyzB';
+let supa = null;
+try {
+  if (window.supabase && window.supabase.createClient) {
+    supa = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  }
+} catch (e) {
+  console.warn('Supabase client init failed:', e);
+}
+
+let _supaSyncTimer = null;
+let _supaLastWriteTs = 0;
+
+function syncStoreToSupabase() {
+  if (!supa) return;
+  // debounce: 1초 간격으로 묶어서 저장
+  clearTimeout(_supaSyncTimer);
+  _supaSyncTimer = setTimeout(async () => {
+    try {
+      const json = JSON.stringify(store);
+      const compressed = (typeof LZString !== 'undefined') ? LZString.compressToBase64(json) : json;
+      _supaLastWriteTs = Date.now();
+      const { error } = await supa.from('store_kv').upsert({
+        key: 'store',
+        value: compressed,
+        updated_at: new Date().toISOString(),
+      });
+      if (error) throw error;
+      // 매핑도 동기화
+      const mapping = localStorage.getItem('shipping_del_map_user');
+      if (mapping) {
+        await supa.from('store_kv').upsert({
+          key: 'shipping_del_map_user',
+          value: mapping,
+          updated_at: new Date().toISOString(),
+        });
+      }
+      if (window.__storeDebug) console.log('[Supabase] sync OK');
+    } catch (e) {
+      console.error('[Supabase] sync failed:', e);
+    }
+  }, 1000);
+}
+
+async function loadStoreFromSupabase() {
+  if (!supa) return null;
+  try {
+    const { data, error } = await supa.from('store_kv').select('key,value,updated_at').in('key', ['store', 'shipping_del_map_user']);
+    if (error) throw error;
+    if (!data || data.length === 0) return null;
+    const result = { store: null, mapping: null, storeUpdatedAt: null };
+    for (const row of data) {
+      if (row.key === 'store' && row.value) {
+        const json = (typeof LZString !== 'undefined') ? LZString.decompressFromBase64(row.value) : row.value;
+        if (json) {
+          try { result.store = JSON.parse(json); result.storeUpdatedAt = row.updated_at; } catch(e){}
+        }
+      } else if (row.key === 'shipping_del_map_user' && row.value) {
+        result.mapping = row.value;
+      }
+    }
+    return result;
+  } catch (e) {
+    console.error('[Supabase] load failed:', e);
+    return null;
+  }
+}
+
+// 페이지 로드 후 Supabase에서 최신 데이터 가져오기
+async function initSupabaseSync() {
+  if (!supa) {
+    console.warn('Supabase 클라이언트 없음 - localStorage 단독 모드');
+    return;
+  }
+  const remote = await loadStoreFromSupabase();
+  if (!remote) return;
+  let updated = false;
+  if (remote.store && Object.keys(remote.store).length > 0) {
+    // 원격 데이터로 덮어쓰기 (가장 최신)
+    store = remote.store;
+    // localStorage에도 백업
+    try {
+      const json = JSON.stringify(store);
+      if (typeof LZString !== 'undefined') {
+        localStorage.setItem(STORE_KEY + '_z', LZString.compressToUTF16(json));
+        localStorage.removeItem(STORE_KEY);
+      } else {
+        localStorage.setItem(STORE_KEY, json);
+      }
+    } catch (e) {}
+    updated = true;
+  }
+  if (remote.mapping) {
+    localStorage.setItem('shipping_del_map_user', remote.mapping);
+    updated = true;
+  }
+  if (updated) {
+    recomputeAggregates();
+    if (typeof renderDateList === 'function') renderDateList();
+    if (typeof render === 'function') render();
+    showToast('☁️ 다른 PC의 최신 데이터 로드 완료', 'success');
+  }
+
+  // Realtime 구독: 다른 PC 변경 시 자동 갱신
+  supa.channel('store_kv_changes')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'store_kv' }, async (payload) => {
+      // 자기 자신이 방금 쓴 변경은 무시 (echo 방지)
+      if (Date.now() - _supaLastWriteTs < 2000) return;
+      if (window.__storeDebug) console.log('[Supabase] realtime change:', payload);
+      const fresh = await loadStoreFromSupabase();
+      if (!fresh) return;
+      if (fresh.store) store = fresh.store;
+      if (fresh.mapping) localStorage.setItem('shipping_del_map_user', fresh.mapping);
+      recomputeAggregates();
+      if (typeof renderDateList === 'function') renderDateList();
+      if (typeof render === 'function') render();
+      showToast('☁️ 다른 PC가 데이터 업데이트 - 자동 반영됨', 'info');
+    })
+    .subscribe();
+}
+// 페이지 초기 렌더 후 Supabase 동기화 시작
+window.addEventListener('load', () => { setTimeout(initSupabaseSync, 800); });
 
 function showToast(msg, type='') {
   const t = document.getElementById('toast');
