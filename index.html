@@ -925,7 +925,9 @@ async function processFile(file) {
     };
   }
   const slot = store[meta.dateStr][meta.channel];
-  slot._files.push({ name: file.name, type: meta.type, ts: Date.now() });
+  if (!slot._files.some(f => f.name === file.name)) {
+    slot._files.push({ name: file.name, type: meta.type, ts: Date.now() });
+  }
 
   if (meta.type === 'detail') {
     slot.detail = parseDetail(wb);
@@ -1603,7 +1605,9 @@ function processSalesStatus(filename, wb) {
       _products_by_channel: productsByChannel,
       _transactions: txns,  // 트랜잭션 원본 (Excel 다운로드용)
       _daily_total: { qty: totalQty, amount: totalAmount, profit: totalProfit, cost: totalCost },
-      _files: [...(existing._files || []), { name: filename, type: '판매현황', ts: Date.now() }],
+      _files: ((existing._files || []).some(f => f.name === filename))
+        ? (existing._files || [])
+        : [...(existing._files || []), { name: filename, type: '판매현황', ts: Date.now() }],
       detail: null, daily_trend: [], products: [],
     };
     }
@@ -2015,8 +2019,9 @@ function render() {
   const channels = Object.keys(dayData);
 
   title.textContent = formatDateDisplay(currentDate) + ' 매출 리포트';
-  const fileNames = channels.flatMap(c => (dayData[c]._files || []).map(f => `<span class="file-tag">${f.name}</span>`)).join('');
-  subtitle.innerHTML = fileNames || '데이터 없음';
+  const allFileNames = channels.flatMap(c => (dayData[c]._files || []).map(f => f.name));
+  const uniqueFileNames = [...new Set(allFileNames)];
+  subtitle.innerHTML = uniqueFileNames.map(n => `<span class="file-tag">${n}</span>`).join('') || '데이터 없음';
 
   // 그룹 탭 (전체 / 쿠팡 / 샵N) + 사이트별 탭 (스마트스토어, 지마켓 등)
   // 현재 일자에 존재하는 모든 서브채널 수집
