@@ -1216,44 +1216,59 @@ function getShippingDelMap() {
   return SHIPPING_DEL_MAP;
 }
 
+// 채널명 → 그룹(쿠팡/샵N) 매핑 헬퍼
+function channelToGroup(ch) {
+  for (const [g, list] of Object.entries(GROUP_CHANNELS)) {
+    if (list.includes(ch)) return g;
+  }
+  return null;  // 매핑 안 된 채널
+}
+
 function processSalesStatus(filename, wb) {
   const ws = wb.Sheets['판매현황'];
   const rows = sheetRows(ws);
   if (rows.length < 3) throw new Error(`${filename}: 판매현황 데이터가 비어있음`);
 
+  // 트랜잭션 단위로 (날짜, 그룹) 분류
+  //   기존: 헤더 한 줄로 전체 그룹 결정 → 섞인 데이터 시 일부 누락
+  //   변경: 트랜잭션의 판매처(shop)별로 channelMap → group 판별 → 자동 분리
+  const txnsByDateGroup = {};  // {date: {group: [txns]}}
   const headerText = String(rows[0]?.[0] || '');
+  let defaultGroup = null;
+  if (/쿠팡|포워드벤처스/.test(headerText)) defaultGroup = '쿠팡';
+  else if (/샵N|엔에이치엔|스마트스토어/.test(headerText)) defaultGroup = '샵N';
 
-  // 채널그룹 판별
-  let group;
-  if (/쿠팡|포워드벤처스/.test(headerText)) group = '쿠팡';
-  else if (/샵N|엔에이치엔|스마트스토어/.test(headerText)) group = '샵N';
-  else throw new Error(`${filename}: 채널그룹(쿠팡/샵N)을 판별할 수 없음`);
-
-  // 트랜잭션을 자체 날짜별로 그룹화 (한 파일에 여러 날짜가 있어도 자동 분리)
-  const txnsByDate = {};
   for (let i = 2; i < rows.length; i++) {
     const r = rows[i];
     if (!r || !r[0]) continue;
     const f = String(r[0]);
     if (f.includes('계') || f.includes('합계') || f.includes('오전') || f.includes('오후')) continue;
 
-    // 첫 컬럼에서 날짜 + 전표번호 추출: "2026/01/15-23"
     const dm = f.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})(?:-(\d+))?/);
     if (!dm) continue;
     const dateStr = `${dm[1]}-${dm[2].padStart(2,'0')}-${dm[3].padStart(2,'0')}`;
-    const txnId = dm[4] || '';  // 전표번호 (없으면 빈 문자열)
+    const txnId = dm[4] || '';
 
     let model = r[4] || '';
-    // 모델명이 비어있으면 품명 끝의 [모델코드] 패턴에서 자동 추출
     if (!model && r[3]) {
       const m = String(r[3]).match(/\[([A-Z][A-Za-z0-9\-_]+)\]\s*$/);
       if (m) model = m[1];
     }
-    if (!txnsByDate[dateStr]) txnsByDate[dateStr] = [];
-    txnsByDate[dateStr].push({
-      txn_id: txnId,        // 전표번호 - 같은 주문의 DEL-와 매칭용
+    const shop = r[2] || '';
+    const ch = channelMap(shop);
+    // 채널 → 그룹. 매핑 안 된 채널은 헤더 기반 default 또는 '쿠팡'으로 폴백
+    let txnGroup = channelToGroup(ch) || defaultGroup;
+    if (!txnGroup) {
+      // 마지막 폴백: 판매처명 키워드로 추측
+      if (/쿠팡|포워드/.test(shop)) txnGroup = '쿠팡';
+      else if (/샵N|엔에이치엔|스마트스토어/.test(shop)) txnGroup = '샵N';
+      else txnGroup = '쿠팡';  // 최종 default
+    }
+
+    const txn = {
+      txn_id: txnId,
       item_code: r[1] || '',
-      shop: r[2] || '',
+      shop: shop,
       desc: r[3] || '',
       model: model,
       qty: r[5] || 0,
@@ -1262,15 +1277,19 @@ function processSalesStatus(filename, wb) {
       total: r[9] || 0,
       cost_unit: r[10] || 0,
       group_name: r[13] || '',
-    });
+    };
+    if (!txnsByDateGroup[dateStr]) txnsByDateGroup[dateStr] = {};
+    if (!txnsByDateGroup[dateStr][txnGroup]) txnsByDateGroup[dateStr][txnGroup] = [];
+    txnsByDateGroup[dateStr][txnGroup].push(txn);
   }
 
-  const dates = Object.keys(txnsByDate).sort();
+  const dates = Object.keys(txnsByDateGroup).sort();
   if (!dates.length) throw new Error(`${filename}: 트랜잭션 날짜를 추출할 수 없음`);
 
-  // 각 날짜별로 슬롯 저장
+  // 각 (날짜, 그룹) 조합별로 슬롯 저장
   for (const dateStr of dates) {
-    const txns = txnsByDate[dateStr];
+    for (const group of Object.keys(txnsByDateGroup[dateStr])) {
+    const txns = txnsByDateGroup[dateStr][group];
 
     // 채널별 합계
     const chMap = {};
@@ -1335,6 +1354,7 @@ function processSalesStatus(filename, wb) {
       _files: [...(existing._files || []), { name: filename, type: '판매현황', ts: Date.now() }],
       detail: null, daily_trend: [], products: [],
     };
+    }
   }
 }
 
