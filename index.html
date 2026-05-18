@@ -549,7 +549,7 @@ function syncStoreToSupabase() {
 async function loadStoreFromSupabase() {
   if (!supa) return null;
   try {
-    const { data, error } = await supa.from('store_kv').select('key,value,updated_at').in('key', ['store', 'shipping_del_map_user']);
+    const { data, error } = await supa.from('store_kv').select('key,value,updated_at').in('key', ['store', 'shipping_del_map_user', 'custom_channel_map']);
     if (error) throw error;
     if (!data || data.length === 0) return null;
     const result = { store: null, mapping: null, storeUpdatedAt: null };
@@ -561,6 +561,8 @@ async function loadStoreFromSupabase() {
         }
       } else if (row.key === 'shipping_del_map_user' && row.value) {
         result.mapping = row.value;
+      } else if (row.key === 'custom_channel_map' && row.value) {
+        result.customChannelMap = row.value;
       }
     }
     return result;
@@ -598,6 +600,10 @@ async function initSupabaseSync() {
     localStorage.setItem('shipping_del_map_user', remote.mapping);
     updated = true;
   }
+  if (remote.customChannelMap) {
+    localStorage.setItem('custom_channel_map', remote.customChannelMap);
+    updated = true;
+  }
   if (updated) {
     recomputeAggregates();
     if (typeof renderDateList === 'function') renderDateList();
@@ -615,6 +621,7 @@ async function initSupabaseSync() {
       if (!fresh) return;
       if (fresh.store) store = fresh.store;
       if (fresh.mapping) localStorage.setItem('shipping_del_map_user', fresh.mapping);
+      if (fresh.customChannelMap) localStorage.setItem('custom_channel_map', fresh.customChannelMap);
       recomputeAggregates();
       if (typeof renderDateList === 'function') renderDateList();
       if (typeof render === 'function') render();
@@ -683,8 +690,192 @@ async function handleFiles(files) {
     }
     render();
     showToast(`${okCount}개 파일 처리 완료${errCount ? ` / ${errCount}개 실패` : ''}`, 'success');
+    // 신규 거래처 감지 → 모달
+    const unmapped = detectUnmappedShops();
+    if (unmapped.length > 0) {
+      setTimeout(() => showNewChannelMappingModal(unmapped), 400);
+    }
   } else if (errCount > 0) {
     showToast(`${errCount}개 파일 처리 실패`, 'error');
+  }
+}
+
+// 신규 거래처 매핑 모달
+function showNewChannelMappingModal(unmappedShops) {
+  if (!unmappedShops || unmappedShops.length === 0) return;
+  // 기존 모달 있으면 제거
+  const old = document.getElementById('newChannelMappingModal');
+  if (old) old.remove();
+  const modal = document.createElement('div');
+  modal.id = 'newChannelMappingModal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1001;display:flex;align-items:center;justify-content:center;padding:20px;';
+  modal.innerHTML = `
+    <div style="background:white;border-radius:12px;max-width:700px;width:100%;max-height:85vh;overflow:auto;box-shadow:0 10px 30px rgba(0,0,0,0.2);">
+      <div style="padding:18px 22px;border-bottom:1px solid var(--border);">
+        <div style="font-size:16px;font-weight:700;">🆕 신규 거래처 ${unmappedShops.length}개 감지</div>
+        <div style="font-size:11px;color:var(--text-sub);margin-top:4px;">아래 거래처들의 채널 그룹을 선택해주세요. 저장 시 다른 PC에도 자동 동기화됩니다.</div>
+      </div>
+      <div style="padding:18px 22px;">
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+          <thead>
+            <tr style="background:var(--bg-sub);">
+              <th style="padding:10px 12px;text-align:left;border:1px solid var(--border);">판매처명 (원본)</th>
+              <th style="padding:10px 12px;text-align:left;border:1px solid var(--border);">표시할 채널명</th>
+              <th style="padding:10px 12px;text-align:left;border:1px solid var(--border);">그룹</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${unmappedShops.map((shop, i) => `
+              <tr>
+                <td style="padding:8px 12px;border:1px solid var(--border);font-size:11px;">${shop}</td>
+                <td style="padding:6px 12px;border:1px solid var(--border);">
+                  <input type="text" data-channel-name="${i}" value="${shop.replace(/"/g, '&quot;')}" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px;">
+                </td>
+                <td style="padding:6px 12px;border:1px solid var(--border);">
+                  <select data-channel-group="${i}" data-shop="${shop.replace(/"/g, '&quot;')}" style="padding:6px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px;">
+                    <option value="쿠팡">쿠팡</option>
+                    <option value="샵N">샵N</option>
+                  </select>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+        <div style="margin-top:14px;font-size:11px;color:var(--text-sub);">
+          💡 그룹은 회계상 분류 기준입니다. 쿠팡 그룹: 쿠팡_로켓/쿠팡_일반/나비엠알오/지마켓 등. 샵N 그룹: 스마트스토어/오늘의집 등.
+        </div>
+      </div>
+      <div style="padding:14px 22px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:8px;">
+        <button id="newChannelCancel" style="padding:8px 16px;background:transparent;color:var(--text-sub);border:1px solid var(--border);border-radius:6px;font-size:13px;cursor:pointer;">나중에</button>
+        <button id="newChannelSave" style="padding:8px 16px;background:var(--primary);color:white;border:none;border-radius:6px;font-size:13px;cursor:pointer;font-weight:600;">저장 + 즉시 적용</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  document.getElementById('newChannelCancel').addEventListener('click', () => modal.remove());
+  document.getElementById('newChannelSave').addEventListener('click', () => {
+    const current = getCustomChannelMap();
+    unmappedShops.forEach((shop, i) => {
+      const chInput = modal.querySelector(`input[data-channel-name="${i}"]`);
+      const grpSelect = modal.querySelector(`select[data-channel-group="${i}"]`);
+      const channel = (chInput?.value || shop).trim();
+      const group = grpSelect?.value || '쿠팡';
+      current[shop] = { channel, group };
+    });
+    saveCustomChannelMap(current);
+    modal.remove();
+    // 즉시 적용: 모든 슬롯 재집계
+    rebuildAllSlotsFromTransactions();
+    recomputeAggregates();
+    saveStore();
+    render();
+    showToast(`신규 거래처 ${unmappedShops.length}개 매핑 저장 + 적용됨`, 'success');
+  });
+}
+
+// 신규 매핑 적용 후 모든 슬롯 재집계 (트랜잭션 → 채널/상품 재집계)
+function rebuildAllSlotsFromTransactions() {
+  // 모든 트랜잭션 + 메타(파일/수집일) 수집
+  const allTxns = [];
+  const slotMeta = {};  // key: `${date}|${group}` → {_collected_date, _files}
+  for (const date of Object.keys(store)) {
+    for (const cg of Object.keys(store[date])) {
+      const slot = store[date][cg];
+      if (slot._source !== '판매현황' || !slot._transactions) continue;
+      slotMeta[`${date}|${cg}`] = {
+        _collected_date: slot._collected_date,
+        _files: slot._files || [],
+      };
+      for (const t of slot._transactions) {
+        allTxns.push({ ...t, _date: date });
+      }
+    }
+  }
+  // 기존 판매현황 슬롯 제거
+  for (const date of Object.keys(store)) {
+    for (const cg of Object.keys(store[date])) {
+      if (store[date][cg]._source === '판매현황') delete store[date][cg];
+    }
+    if (Object.keys(store[date]).length === 0) delete store[date];
+  }
+  // (date, group)별 재분류
+  const byDG = {};  // {date: {group: [txns]}}
+  for (const t of allTxns) {
+    const date = t._date;
+    const ch = channelMap(t.shop);
+    let group = channelToGroup(ch);
+    if (!group) {
+      if (/쿠팡|포워드/.test(t.shop || '')) group = '쿠팡';
+      else if (/샵N|엔에이치엔|스마트스토어/.test(t.shop || '')) group = '샵N';
+      else group = '쿠팡';
+    }
+    delete t._date;
+    if (!byDG[date]) byDG[date] = {};
+    if (!byDG[date][group]) byDG[date][group] = [];
+    byDG[date][group].push(t);
+  }
+  // 슬롯 재생성
+  for (const date of Object.keys(byDG)) {
+    for (const group of Object.keys(byDG[date])) {
+      const txns = byDG[date][group];
+      // 채널별/상품별 집계 (processSalesStatus와 동일)
+      const chMap = {};
+      (GROUP_CHANNELS[group] || []).forEach(c => chMap[c] = { channel: c, qty:0, amount:0, profit:0 });
+      for (const t of txns) {
+        const ch = channelMap(t.shop);
+        if (!chMap[ch]) chMap[ch] = { channel: ch, qty:0, amount:0, profit:0 };
+        const isDelivery = String(t.item_code).startsWith('DEL-');
+        const cost = (t.cost_unit || 0) * (t.qty || 0);
+        chMap[ch].amount += t.amount;
+        chMap[ch].profit += (t.amount - cost);
+        if (!isDelivery) chMap[ch].qty += t.qty;
+      }
+      const channelsToday = Object.values(chMap)
+        .filter(c => c.amount !== 0 || c.qty !== 0 || (GROUP_CHANNELS[group] || []).includes(c.channel))
+        .sort((a,b) => b.amount - a.amount);
+      const prodMap = {};
+      const prodByChannel = {};
+      for (const t of txns) {
+        if (!t.model) continue;
+        if (String(t.item_code).startsWith('DEL-')) continue;
+        if (/판매장려금/.test(String(t.group_name))) continue;
+        const ch = channelMap(t.shop);
+        const k = String(t.model);
+        if (!prodMap[k]) prodMap[k] = { name: k, qty:0, revenue_amount:0, cost_amount:0 };
+        prodMap[k].qty += t.qty;
+        prodMap[k].revenue_amount += t.amount;
+        prodMap[k].cost_amount += (t.cost_unit || 0) * (t.qty || 0);
+        if (!prodByChannel[ch]) prodByChannel[ch] = {};
+        if (!prodByChannel[ch][k]) prodByChannel[ch][k] = { name: k, qty:0, revenue_amount:0, cost_amount:0 };
+        prodByChannel[ch][k].qty += t.qty;
+        prodByChannel[ch][k].revenue_amount += t.amount;
+        prodByChannel[ch][k].cost_amount += (t.cost_unit || 0) * (t.qty || 0);
+      }
+      const productsToday = Object.values(prodMap);
+      const productsByChannel = {};
+      for (const ch of Object.keys(prodByChannel)) {
+        productsByChannel[ch] = Object.values(prodByChannel[ch]);
+      }
+      const totalAmount = channelsToday.reduce((s,c) => s + c.amount, 0);
+      const totalQty = channelsToday.reduce((s,c) => s + c.qty, 0);
+      const totalProfit = channelsToday.reduce((s,c) => s + c.profit, 0);
+      const totalCost = totalAmount - totalProfit;
+      const meta = slotMeta[`${date}|${group}`] || {};
+      if (!store[date]) store[date] = {};
+      store[date][group] = {
+        upload_date: date, channel: group,
+        _source: '판매현황',
+        _collected_date: meta._collected_date || null,
+        _channels_today: channelsToday,
+        _products_today: productsToday,
+        _products_by_channel: productsByChannel,
+        _transactions: txns,
+        _daily_total: { qty: totalQty, amount: totalAmount, profit: totalProfit, cost: totalCost },
+        _files: meta._files || [],
+        detail: null, daily_trend: [], products: [],
+      };
+    }
   }
 }
 
@@ -748,9 +939,33 @@ async function processFile(file) {
 // ================================================================
 // 판매현황 (ERP 원본) 파서 → 매출데이터/매출리스트 자동 생성
 // ================================================================
+// 사용자 정의 채널 매핑 (신규 거래처) - localStorage + Supabase 동기화
+//   format: { '판매처원본명': { channel: '표준채널명', group: '쿠팡'|'샵N' } }
+function getCustomChannelMap() {
+  try {
+    const raw = localStorage.getItem('custom_channel_map');
+    return raw ? JSON.parse(raw) : {};
+  } catch (e) { return {}; }
+}
+function saveCustomChannelMap(map) {
+  localStorage.setItem('custom_channel_map', JSON.stringify(map));
+  // Supabase 동기화
+  if (typeof supa !== 'undefined' && supa) {
+    supa.from('store_kv').upsert({
+      key: 'custom_channel_map',
+      value: JSON.stringify(map),
+      updated_at: new Date().toISOString(),
+    }).then(() => {}).catch(e => console.error('custom_channel_map sync failed:', e));
+  }
+}
+
 function channelMap(shop) {
   if (!shop) return '기타';
   const s = String(shop);
+  // 사용자 매핑 우선
+  const custom = getCustomChannelMap();
+  if (custom[s] && custom[s].channel) return custom[s].channel;
+  // 기존 키워드 규칙
   if (/쿠팡로켓|포워드벤처스/.test(s)) return '쿠팡_로켓';
   if (/쿠팡/.test(s)) return '쿠팡_일반';
   if (/나비엠알오/.test(s)) return '나비엠알오';
@@ -759,7 +974,15 @@ function channelMap(shop) {
   if (/토스/.test(s)) return '토스';
   if (/샵N|엔에이치엔/.test(s)) return '스마트스토어';
   if (/오늘의집|버킷플레이스/.test(s)) return '오늘의집';
+  // 폴백 정리만
   return s.replace(/^오픈마켓\(/, '').replace(/\)$/, '').replace(/라인$/, '');
+}
+
+// 채널이 알려진 키워드 규칙으로 매핑된 건지 (즉, 신규 채널이 아닌지) 판별
+function isKnownChannel(shop) {
+  if (!shop) return true;
+  const s = String(shop);
+  return /쿠팡로켓|포워드벤처스|쿠팡|나비엠알오|지마켓|11번가|십일번가|토스|샵N|엔에이치엔|오늘의집|버킷플레이스/.test(s);
 }
 
 // 채널그룹별 표시할 채널 목록 (데이터 없는 채널도 0으로 표시)
@@ -1216,12 +1439,41 @@ function getShippingDelMap() {
   return SHIPPING_DEL_MAP;
 }
 
-// 채널명 → 그룹(쿠팡/샵N) 매핑 헬퍼
+// 채널명 → 그룹(쿠팡/샵N) 매핑 헬퍼 (사용자 매핑 우선)
 function channelToGroup(ch) {
+  const custom = getCustomChannelMap();
+  for (const v of Object.values(custom)) {
+    if (v.channel === ch && v.group) return v.group;
+  }
   for (const [g, list] of Object.entries(GROUP_CHANNELS)) {
     if (list.includes(ch)) return g;
   }
-  return null;  // 매핑 안 된 채널
+  return null;
+}
+
+// shop이 신규 거래처(사용자 매핑 + 알려진 키워드 둘 다 매칭 안 됨)인지 판별
+function isUnmappedShop(shop) {
+  if (!shop) return false;
+  const s = String(shop);
+  const custom = getCustomChannelMap();
+  if (custom[s]) return false;  // 사용자가 이미 매핑함
+  if (isKnownChannel(s)) return false;  // 알려진 채널
+  return true;
+}
+
+// 현재 store에서 신규 거래처 shop 목록 추출
+function detectUnmappedShops() {
+  const set = new Set();
+  for (const date of Object.keys(store)) {
+    for (const cg of Object.keys(store[date])) {
+      const slot = store[date][cg];
+      if (slot._source !== '판매현황' || !slot._transactions) continue;
+      for (const t of slot._transactions) {
+        if (isUnmappedShop(t.shop)) set.add(t.shop);
+      }
+    }
+  }
+  return Array.from(set);
 }
 
 function processSalesStatus(filename, wb) {
