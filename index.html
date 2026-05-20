@@ -967,7 +967,8 @@ function channelMap(shop) {
   // 사용자 매핑 우선
   const custom = getCustomChannelMap();
   if (custom[s] && custom[s].channel) return custom[s].channel;
-  // 기존 키워드 규칙
+  // 기존 키워드 규칙 ('쿠팡일반' 명시는 포워드벤처스보다 우선 - 분류 정확도)
+  if (/쿠팡일반|쿠팡_일반/.test(s)) return '쿠팡_일반';
   if (/쿠팡로켓|포워드벤처스/.test(s)) return '쿠팡_로켓';
   if (/쿠팡/.test(s)) return '쿠팡_일반';
   if (/나비엠알오/.test(s)) return '나비엠알오';
