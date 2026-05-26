@@ -3895,36 +3895,36 @@ function buildReportSheet(slot, cg, date) {
   setF(ws, `W${chTotalRow}`, `SUM(W${_r0}:W${_r1})`, _sumPrev.amount > 0 ? _totalForecast - _sumPrev.amount : '');
   setF(ws, `X${chTotalRow}`, `IFERROR(V${chTotalRow}/D${chTotalRow}-1, "")`, _sumPrev.amount > 0 ? _totalForecast / _sumPrev.amount - 1 : '');
 
-  // 컬럼 너비 (G는 hidden, E/K/Q/U는 좁게)
+  // 컬럼 너비 (E/G/K/Q/U hidden, 섹션 경계는 이중 테두리)
   ws['!cols'] = [
     {wch:2},                  // A
     {wch:22},                 // B
     {wch:14},                 // C
     {wch:14},                 // D
-    {wch:1},                  // E (테두리 제거 - 아래 처리)
+    {hidden:true},            // E - hidden
     {wch:14},                 // F
-    {hidden:true},            // G - 완전 숨김
+    {hidden:true},            // G - hidden
     {wch:5},                  // H
     {wch:22},                 // I
     {wch:14},                 // J
-    {wch:1},                  // K (테두리 제거)
+    {hidden:true},            // K - hidden
     {wch:14},                 // L
     {wch:14},                 // M
     {wch:5},                  // N
     {wch:8},                  // O
     {wch:14},                 // P
-    {wch:1},                  // Q (테두리 제거)
+    {hidden:true},            // Q - hidden
     {wch:14},                 // R
     {wch:14},                 // S
     {wch:5},                  // T
-    {wch:1},                  // U (테두리 제거)
+    {hidden:true},            // U - hidden
     {wch:14},                 // V
     {wch:14},                 // W
     {wch:10}                  // X
   ];
-  // E/K/Q/U 간격 컬럼의 테두리 제거 (시각적 분리감)
-  const _noBorderCols = [4, 10, 16, 20];  // E, K, Q, U (0-based)
-  const _wsRange = XLSX.utils.decode_range(ws['!ref'] || 'A1:X1');
+  // E/G/K/Q/U 간격 컬럼 hidden - 양 옆 컬럼들이 인접해 보임. 그 자리에 이중 테두리 적용.
+  // 섹션 경계 컬럼: D(3)/F(5), J(9)/L(11), P(15)/R(17), T(19)/V(21)
+  // 인접 셀의 오른쪽/왼쪽 테두리를 'double'로 변경
   // 백분율 컬럼: E19, C19, C21, C26, X{*}
   // formatNumbers는 셀 단위가 아니라 컬럼 단위로 처리하므로 해당 셀에 직접 적용
   formatNumbers(ws);
@@ -3953,13 +3953,56 @@ function buildReportSheet(slot, cg, date) {
     // 채널 표 (B-X, 헤더1~종합)
     { range: `B${chHeader1Row}:X${chTotalRow}` },
   ]);
-  // E/K/Q/U 간격 컬럼의 셀 border 제거
+  // 섹션 경계 컬럼에 이중 테두리 적용
+  // 페어: [왼쪽컬럼, 오른쪽컬럼] (이 사이가 섹션 경계)
+  //  D-F: 입점몰↔전월누적 사이는 아니고, 전월누적 안의 마진-마진율 사이라 제외
+  // 채널 표 섹션: 전월(C-H) | 당월(I-N) | 일일(O-T) | 당월마감 그 외(V-X)
+  // 섹션 경계: H-I, N-O, T-V
   const _maxRow = chTotalRow;
-  _noBorderCols.forEach(c => {
-    for (let r = 0; r <= _maxRow; r++) {
-      const ref = XLSX.utils.encode_cell({ r, c });
-      if (ws[ref] && ws[ref].s) {
-        delete ws[ref].s.border;
+  const _doublePairs = [
+    { left: 7, right: 8 },   // H-I (전월↔당월)
+    { left: 13, right: 14 }, // N-O (당월↔일일)
+    { left: 19, right: 21 }, // T-V (일일↔당월마감, U hidden)
+  ];
+  _doublePairs.forEach(({ left, right }) => {
+    for (let r = chHeader1Row - 1; r <= _maxRow - 1; r++) {
+      const refL = XLSX.utils.encode_cell({ r, c: left });
+      const refR = XLSX.utils.encode_cell({ r, c: right });
+      if (ws[refL]) {
+        ws[refL].s = ws[refL].s || {};
+        ws[refL].s.border = ws[refL].s.border || {};
+        ws[refL].s.border.right = { style: 'double', color: { rgb: '000000' } };
+      }
+      if (ws[refR]) {
+        ws[refR].s = ws[refR].s || {};
+        ws[refR].s.border = ws[refR].s.border || {};
+        ws[refR].s.border.left = { style: 'double', color: { rgb: '000000' } };
+      }
+    }
+  });
+  // 상품 표 섹션도 동일 (R2-R{sumRow})
+  const _prodDoublePairs = [
+    { left: 12, right: 14 }, // M-O (전월↔당월, N hidden 아니지만 N=마진율자리)
+    { left: 15, right: 17 }, // P-R (당월↔일일, Q hidden)
+    { left: 18, right: 21 }, // S-V (일일↔당월마감)
+  ];
+  // 위는 상품 표용 - 컬럼 위치 다름. 정확히는 상품 표는:
+  // I=품목, L=전월 수량, M=전월 매출, O=당월 수량, P=당월 매출,
+  // R=일일 수량, S=일일 매출, V=당월마감, W=차액, X=증감률
+  // 섹션 경계: M-O (전월↔당월, N hidden), P-R (당월↔일일, Q hidden), S-V (일일↔당월마감, T/U hidden)
+  _prodDoublePairs.forEach(({ left, right }) => {
+    for (let r = 1; r <= sumRow - 1; r++) {  // R2-R{sumRow}
+      const refL = XLSX.utils.encode_cell({ r, c: left });
+      const refR = XLSX.utils.encode_cell({ r, c: right });
+      if (ws[refL]) {
+        ws[refL].s = ws[refL].s || {};
+        ws[refL].s.border = ws[refL].s.border || {};
+        ws[refL].s.border.right = { style: 'double', color: { rgb: '000000' } };
+      }
+      if (ws[refR]) {
+        ws[refR].s = ws[refR].s || {};
+        ws[refR].s.border = ws[refR].s.border || {};
+        ws[refR].s.border.left = { style: 'double', color: { rgb: '000000' } };
       }
     }
   });
