@@ -3895,32 +3895,33 @@ function buildReportSheet(slot, cg, date) {
   setF(ws, `W${chTotalRow}`, `SUM(W${_r0}:W${_r1})`, _sumPrev.amount > 0 ? _totalForecast - _sumPrev.amount : '');
   setF(ws, `X${chTotalRow}`, `IFERROR(V${chTotalRow}/D${chTotalRow}-1, "")`, _sumPrev.amount > 0 ? _totalForecast / _sumPrev.amount - 1 : '');
 
-  // 컬럼 너비 - 데이터 컬럼 충분히 + 빈 컬럼 매우 좁게
+  // 컬럼 너비 - 원본 양식 그대로
+  // 채널 표는 D-E/F-G/J-K/L-M/P-Q/R-S를 매 행 병합해서 wide 셀 표시
   ws['!cols'] = [
-    {wch:2},                  // A
-    {wch:22},                 // B (좌측 라벨)
-    {wch:14},                 // C (좌측 값)
-    {wch:14},                 // D (채널 전월 납품가매출)
-    {wch:1.5},                // E (빈)
-    {wch:13},                 // F (채널 전월 마진)
-    {wch:1.5},                // G (빈)
-    {wch:7},                  // H (채널 전월 마진율)
-    {wch:18},                 // I (상품 모델명)
-    {wch:14},                 // J (채널 당월 납품가매출)
-    {wch:1.5},                // K (빈)
-    {wch:8},                  // L (상품 전월 수량)
-    {wch:14},                 // M (상품 전월 매출 / 채널 당월 마진)
-    {wch:1.5},                // N (빈)
-    {wch:8},                  // O (상품 당월 수량)
-    {wch:14},                 // P (상품 당월 매출 / 채널 일일 납품가매출)
-    {wch:1.5},                // Q (빈)
-    {wch:8},                  // R (상품 일일 수량)
-    {wch:14},                 // S (상품 일일 매출 / 채널 일일 마진)
-    {wch:7},                  // T (채널 일일 마진율)
-    {wch:1.5},                // U (빈)
-    {wch:14},                 // V (당월마감예상)
-    {wch:14},                 // W (전월 vs 당월)
-    {wch:9}                   // X (증감률)
+    {wch:2.5},                // A
+    {wch:13},                 // B (좌측 라벨)
+    {wch:9},                  // C (수량)
+    {wch:11},                 // D (납품가매출 - 전월) merged with E
+    {wch:6.5},                // E -- merge target
+    {wch:9},                  // F (마진 - 전월) merged with G
+    {wch:6.5},                // G -- merge target
+    {wch:8},                  // H (마진율 - 전월)
+    {wch:11},                 // I (품목 / 수량 - 당월)
+    {wch:8.5},                // J (납품가매출 - 당월) merged with K
+    {wch:6},                  // K -- merge target
+    {wch:8.5},                // L (전월 수량 product / 마진 channel) merged with M for channel
+    {wch:10},                 // M (전월 매출 product)
+    {wch:8},                  // N (마진율 - 당월)
+    {wch:9},                  // O (당월 수량 product / 일일 수량 channel)
+    {wch:8.5},                // P (당월 매출 product / 일일 매출 channel) merged with Q for channel
+    {wch:8},                  // Q (gap product / merge target channel)
+    {wch:8.5},                // R (일일 수량 product / 일일 마진 channel) merged with S for channel
+    {wch:8.5},                // S (일일 매출 product)
+    {wch:9},                  // T (마진율 - 일일)
+    {wch:1.4},                // U (gap)
+    {wch:13},                 // V (당월마감예상)
+    {wch:13},                 // W (전월 vs 당월)
+    {wch:8}                   // X (증감률)
   ];
   // 백분율 컬럼: E19, C19, C21, C26, X{*}
   // formatNumbers는 셀 단위가 아니라 컬럼 단위로 처리하므로 해당 셀에 직접 적용
@@ -3950,8 +3951,25 @@ function buildReportSheet(slot, cg, date) {
     // 채널 표 (B-X, 헤더1~종합)
     { range: `B${chHeader1Row}:X${chTotalRow}` },
   ]);
-  // 매 행 병합은 xlsx-js-style 한계로 안정적이지 않아 제거.
-  // 컬럼 너비로 깔끔하게 처리.
+  // 채널 표 매 행 셀 병합 (원본 양식과 동일):
+  //   D-E: 납품가 매출(전월), F-G: 마진(전월)
+  //   J-K: 납품가 매출(당월), L-M: 마진(당월)
+  //   P-Q: 납품가 매출(일일), R-S: 마진(일일)
+  //   적용 행: chHeader2Row (헤더) ~ chTotalRow (종합)
+  for (let r = chHeader2Row; r <= chTotalRow; r++) {
+    // D-E (cols 3-4)
+    ws['!merges'].push({ s:{r:r-1, c:3}, e:{r:r-1, c:4} });
+    // F-G (cols 5-6)
+    ws['!merges'].push({ s:{r:r-1, c:5}, e:{r:r-1, c:6} });
+    // J-K (cols 9-10)
+    ws['!merges'].push({ s:{r:r-1, c:9}, e:{r:r-1, c:10} });
+    // L-M (cols 11-12)
+    ws['!merges'].push({ s:{r:r-1, c:11}, e:{r:r-1, c:12} });
+    // P-Q (cols 15-16)
+    ws['!merges'].push({ s:{r:r-1, c:15}, e:{r:r-1, c:16} });
+    // R-S (cols 17-18)
+    ws['!merges'].push({ s:{r:r-1, c:17}, e:{r:r-1, c:18} });
+  }
   return ws;
 }
 
