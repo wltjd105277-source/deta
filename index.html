@@ -3895,29 +3895,29 @@ function buildReportSheet(slot, cg, date) {
   setF(ws, `W${chTotalRow}`, `SUM(W${_r0}:W${_r1})`, _sumPrev.amount > 0 ? _totalForecast - _sumPrev.amount : '');
   setF(ws, `X${chTotalRow}`, `IFERROR(V${chTotalRow}/D${chTotalRow}-1, "")`, _sumPrev.amount > 0 ? _totalForecast / _sumPrev.amount - 1 : '');
 
-  // 컬럼 너비 (E/G/K/Q/U hidden, 섹션 경계는 이중 테두리)
+  // 컬럼 너비 (E/G/K/Q/U 너비 0으로 사실상 안 보이게, hidden 표시 없음)
   ws['!cols'] = [
     {wch:2},                  // A
     {wch:22},                 // B
     {wch:14},                 // C
     {wch:14},                 // D
-    {hidden:true},            // E - hidden
+    {wch:0},                  // E
     {wch:14},                 // F
-    {hidden:true},            // G - hidden
+    {wch:0},                  // G
     {wch:5},                  // H
     {wch:22},                 // I
     {wch:14},                 // J
-    {hidden:true},            // K - hidden
+    {wch:0},                  // K
     {wch:14},                 // L
     {wch:14},                 // M
     {wch:5},                  // N
     {wch:8},                  // O
     {wch:14},                 // P
-    {hidden:true},            // Q - hidden
+    {wch:0},                  // Q
     {wch:14},                 // R
     {wch:14},                 // S
     {wch:5},                  // T
-    {hidden:true},            // U - hidden
+    {wch:0},                  // U
     {wch:14},                 // V
     {wch:14},                 // W
     {wch:10}                  // X
