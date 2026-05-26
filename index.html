@@ -424,6 +424,7 @@
       <button class="btn" id="btnImport">📥 백업 가져오기</button>
       <input type="file" id="importInput" accept=".json" style="display:none">
       <button class="btn" id="btnRebuild" style="background:#fbbf24;color:#fff;">🔄 채널 재분류 (룰 변경 적용)</button>
+      <button class="btn" id="btnDiagComputez" style="background:#0ea5e9;color:#fff;">🔍 컴퓨존 진단</button>
       <button class="btn danger" id="btnClear">🗑 모든 데이터 삭제</button>
     </div>
   </aside>
@@ -4388,6 +4389,84 @@ function buildShoppingMall(slot) {
 }
 
 document.getElementById('btnImport').addEventListener('click', () => document.getElementById('importInput').click());
+document.getElementById('btnDiagComputez').addEventListener('click', () => {
+  showComputezDiagnosticModal();
+});
+
+function showComputezDiagnosticModal() {
+  const allTxns = [];
+  for (const d of Object.keys(store).sort()) {
+    const slot = store[d]?.['컴퓨존'];
+    if (!slot || !slot._transactions) continue;
+    slot._transactions.forEach(t => allTxns.push({ ...t, _date: d }));
+  }
+  if (allTxns.length === 0) {
+    showToast('컴퓨존 트랜잭션이 없습니다', 'error');
+    return;
+  }
+  const total = allTxns.length;
+  const withRemark = allTxns.filter(t => t.remark && t.remark.trim()).length;
+  const withGaram = allTxns.filter(t => /가산재고/.test(t.remark || '')).length;
+  const withGaramShort = allTxns.filter(t => /가산/.test(t.remark || '')).length;
+  const withTongjin = allTxns.filter(t => /통진/.test([t.remark, t.warehouse].join(' '))).length;
+  const warehouses = {};
+  allTxns.forEach(t => {
+    const w = t.warehouse || '(빈)';
+    warehouses[w] = (warehouses[w] || 0) + 1;
+  });
+  const remarkSet = new Set();
+  for (const t of allTxns) {
+    const rm = (t.remark || '').trim();
+    if (rm) remarkSet.add(rm);
+    if (remarkSet.size >= 15) break;
+  }
+  const remarkSamples = Array.from(remarkSet);
+  const matchedGaram = allTxns.filter(t => channelMapTxn(t) === '컴퓨존_가산재고').length;
+  const matchedYongsan = allTxns.filter(t => channelMapTxn(t) === '컴퓨존_용산출고').length;
+
+  const modal = document.createElement('div');
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1001;display:flex;align-items:center;justify-content:center;padding:20px;';
+  modal.innerHTML = `
+    <div style="background:white;border-radius:12px;max-width:800px;width:100%;max-height:85vh;overflow:auto;box-shadow:0 10px 30px rgba(0,0,0,0.2);">
+      <div style="padding:18px 22px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;">
+        <div style="font-size:16px;font-weight:700;">🔍 컴퓨존 트랜잭션 진단</div>
+        <button class="modal-close-btn" style="background:transparent;border:none;font-size:20px;cursor:pointer;color:var(--text-sub);width:32px;height:32px;border-radius:6px;">×</button>
+      </div>
+      <div style="padding:18px 22px;">
+        <h4 style="margin:0 0 10px;font-size:14px;">📊 통계</h4>
+        <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:18px;">
+          <tr><td style="padding:6px 10px;border:1px solid var(--border);">총 트랜잭션</td><td style="padding:6px 10px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${total}건</td></tr>
+          <tr><td style="padding:6px 10px;border:1px solid var(--border);">비고사항(remark) 채워진 것</td><td style="padding:6px 10px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${withRemark}건</td></tr>
+          <tr style="background:#fef3c7;"><td style="padding:6px 10px;border:1px solid var(--border);">remark에 '가산재고' 포함</td><td style="padding:6px 10px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${withGaram}건</td></tr>
+          <tr><td style="padding:6px 10px;border:1px solid var(--border);">remark에 '가산'만 포함</td><td style="padding:6px 10px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${withGaramShort}건</td></tr>
+          <tr><td style="padding:6px 10px;border:1px solid var(--border);">'통진' 포함 (remark or warehouse)</td><td style="padding:6px 10px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${withTongjin}건</td></tr>
+          <tr style="background:#e0e7ff;"><td style="padding:6px 10px;border:1px solid var(--border);font-weight:600;">현재 분류 결과</td><td style="padding:6px 10px;border:1px solid var(--border);"></td></tr>
+          <tr><td style="padding:6px 10px;border:1px solid var(--border);">  → 컴퓨존_가산재고</td><td style="padding:6px 10px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${matchedGaram}건</td></tr>
+          <tr><td style="padding:6px 10px;border:1px solid var(--border);">  → 컴퓨존_용산출고</td><td style="padding:6px 10px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${matchedYongsan}건</td></tr>
+        </table>
+
+        <h4 style="margin:14px 0 10px;font-size:14px;">🏢 창고(warehouse) 분포</h4>
+        <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:18px;">
+          ${Object.entries(warehouses).map(([w, c]) => `<tr><td style="padding:6px 10px;border:1px solid var(--border);">${w}</td><td style="padding:6px 10px;border:1px solid var(--border);text-align:right;">${c}건</td></tr>`).join('')}
+        </table>
+
+        <h4 style="margin:14px 0 10px;font-size:14px;">📝 비고사항(remark) unique 텍스트 (최대 15개)</h4>
+        <div style="max-height:300px;overflow:auto;border:1px solid var(--border);border-radius:6px;padding:10px;background:#f9fafb;">
+          ${remarkSamples.length > 0 ? remarkSamples.map(s => `<div style="font-size:11px;padding:4px 0;border-bottom:1px dashed var(--border);font-family:monospace;">${s.replace(/</g, '&lt;')}</div>`).join('') : '<div style="color:var(--text-sub);font-size:12px;">비고사항이 모두 비어있습니다.</div>'}
+        </div>
+
+        <div style="margin-top:14px;font-size:11px;color:var(--text-sub);line-height:1.5;">
+          📌 가산재고 분류 0건이면: 1) 비고사항 샘플에 '가산재고' 있는지 확인, 2) 있으면 매칭 코드 문제, 3) 없으면 ERP에 실제로 가산재고 트랜잭션 없음
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  modal.addEventListener('click', evt => {
+    if (evt.target === modal || evt.target.closest('.modal-close-btn')) modal.remove();
+  });
+}
+
 document.getElementById('btnRebuild').addEventListener('click', () => {
   if (!confirm('현재 채널 매핑 규칙으로 모든 슬롯을 재분류합니다. 진행하시겠습니까?')) return;
   try {
