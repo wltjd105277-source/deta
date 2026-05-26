@@ -980,7 +980,7 @@ function channelMap(shop, remark) {
   if (/컴퓨존|compuzone/i.test(s)) {
     const rm = String(remark || '');
     if (/가산\s*재고/.test(rm)) return '컴퓨존_가산재고';
-    return '컴퓨존_용산출고';  // 그 외 모두
+    return '컴퓨존_일반출고';  // 그 외 모두
   }
   // 기존 키워드 규칙 ('쿠팡일반' 명시는 포워드벤처스보다 우선 - 분류 정확도)
   if (/쿠팡일반|쿠팡_일반/.test(s)) return '쿠팡_일반';
@@ -1007,7 +1007,7 @@ function isKnownChannel(shop) {
 const GROUP_CHANNELS = {
   '쿠팡': ['쿠팡_로켓', '쿠팡_일반', '나비엠알오', '십일번가', '지마켓', '토스'],
   '샵N': ['스마트스토어', '오늘의집'],
-  '컴퓨존': ['컴퓨존_가산재고', '컴퓨존_용산출고'],
+  '컴퓨존': ['컴퓨존_가산재고', '컴퓨존_일반출고'],
 };
 
 // ─────────────── 배송비 그룹 (DEL-매출배XXX 품목코드 매핑) ───────────────
@@ -4421,7 +4421,7 @@ function showComputezDiagnosticModal() {
   }
   const remarkSamples = Array.from(remarkSet);
   const matchedGaram = allTxns.filter(t => channelMapTxn(t) === '컴퓨존_가산재고').length;
-  const matchedYongsan = allTxns.filter(t => channelMapTxn(t) === '컴퓨존_용산출고').length;
+  const matchedYongsan = allTxns.filter(t => channelMapTxn(t) === '컴퓨존_일반출고').length;
 
   const modal = document.createElement('div');
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1001;display:flex;align-items:center;justify-content:center;padding:20px;';
@@ -4440,7 +4440,7 @@ function showComputezDiagnosticModal() {
           <tr><td style="padding:6px 10px;border:1px solid var(--border);">remark에 '가산' 포함</td><td style="padding:6px 10px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${withGaramShort}건</td></tr>
           <tr style="background:#e0e7ff;"><td style="padding:6px 10px;border:1px solid var(--border);font-weight:600;">현재 분류 결과</td><td style="padding:6px 10px;border:1px solid var(--border);"></td></tr>
           <tr><td style="padding:6px 10px;border:1px solid var(--border);">  → 컴퓨존_가산재고</td><td style="padding:6px 10px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${matchedGaram}건</td></tr>
-          <tr><td style="padding:6px 10px;border:1px solid var(--border);">  → 컴퓨존_용산출고</td><td style="padding:6px 10px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${matchedYongsan}건</td></tr>
+          <tr><td style="padding:6px 10px;border:1px solid var(--border);">  → 컴퓨존_일반출고</td><td style="padding:6px 10px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${matchedYongsan}건</td></tr>
         </table>
 
         <h4 style="margin:14px 0 10px;font-size:14px;">🏢 창고(warehouse) 분포</h4>
