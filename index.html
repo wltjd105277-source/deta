@@ -976,10 +976,10 @@ function channelMap(shop, remark) {
   // 사용자 매핑 우선
   const custom = getCustomChannelMap();
   if (custom[s] && custom[s].channel) return custom[s].channel;
-  // 컴퓨존 - 비고사항(remark)에 '가산재고' 키워드만 있을 때 가산재고로 분류
+  // 컴퓨존 - 비고사항(remark)에 '가산', '가산재고', '가산 재고' 매칭
   if (/컴퓨존|compuzone/i.test(s)) {
     const rm = String(remark || '');
-    if (/가산재고/.test(rm)) return '컴퓨존_가산재고';
+    if (/가산\s*재고|가산/.test(rm)) return '컴퓨존_가산재고';
     return '컴퓨존_용산출고';  // 그 외 모두
   }
   // 기존 키워드 규칙 ('쿠팡일반' 명시는 포워드벤처스보다 우선 - 분류 정확도)
@@ -4408,7 +4408,6 @@ function showComputezDiagnosticModal() {
   const withRemark = allTxns.filter(t => t.remark && t.remark.trim()).length;
   const withGaram = allTxns.filter(t => /가산재고/.test(t.remark || '')).length;
   const withGaramShort = allTxns.filter(t => /가산/.test(t.remark || '')).length;
-  const withTongjin = allTxns.filter(t => /통진/.test([t.remark, t.warehouse].join(' '))).length;
   const warehouses = {};
   allTxns.forEach(t => {
     const w = t.warehouse || '(빈)';
@@ -4438,8 +4437,7 @@ function showComputezDiagnosticModal() {
           <tr><td style="padding:6px 10px;border:1px solid var(--border);">총 트랜잭션</td><td style="padding:6px 10px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${total}건</td></tr>
           <tr><td style="padding:6px 10px;border:1px solid var(--border);">비고사항(remark) 채워진 것</td><td style="padding:6px 10px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${withRemark}건</td></tr>
           <tr style="background:#fef3c7;"><td style="padding:6px 10px;border:1px solid var(--border);">remark에 '가산재고' 포함</td><td style="padding:6px 10px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${withGaram}건</td></tr>
-          <tr><td style="padding:6px 10px;border:1px solid var(--border);">remark에 '가산'만 포함</td><td style="padding:6px 10px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${withGaramShort}건</td></tr>
-          <tr><td style="padding:6px 10px;border:1px solid var(--border);">'통진' 포함 (remark or warehouse)</td><td style="padding:6px 10px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${withTongjin}건</td></tr>
+          <tr><td style="padding:6px 10px;border:1px solid var(--border);">remark에 '가산' 포함</td><td style="padding:6px 10px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${withGaramShort}건</td></tr>
           <tr style="background:#e0e7ff;"><td style="padding:6px 10px;border:1px solid var(--border);font-weight:600;">현재 분류 결과</td><td style="padding:6px 10px;border:1px solid var(--border);"></td></tr>
           <tr><td style="padding:6px 10px;border:1px solid var(--border);">  → 컴퓨존_가산재고</td><td style="padding:6px 10px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${matchedGaram}건</td></tr>
           <tr><td style="padding:6px 10px;border:1px solid var(--border);">  → 컴퓨존_용산출고</td><td style="padding:6px 10px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${matchedYongsan}건</td></tr>
