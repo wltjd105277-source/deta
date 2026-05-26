@@ -962,12 +962,18 @@ function saveCustomChannelMap(map) {
   }
 }
 
-function channelMap(shop) {
+function channelMap(shop, remark) {
   if (!shop) return '기타';
   const s = String(shop);
   // 사용자 매핑 우선
   const custom = getCustomChannelMap();
   if (custom[s] && custom[s].channel) return custom[s].channel;
+  // 컴퓨존 - 비고사항(remark) '가산재고' 키워드로 세분화
+  if (/컴퓨존|compuzone/i.test(s)) {
+    const rm = String(remark || '');
+    if (/가산재고/.test(rm)) return '가산재고';
+    return '용산출고';  // 그 외 전부
+  }
   // 기존 키워드 규칙 ('쿠팡일반' 명시는 포워드벤처스보다 우선 - 분류 정확도)
   if (/쿠팡일반|쿠팡_일반/.test(s)) return '쿠팡_일반';
   if (/쿠팡로켓|포워드벤처스/.test(s)) return '쿠팡_로켓';
@@ -978,7 +984,6 @@ function channelMap(shop) {
   if (/토스/.test(s)) return '토스';
   if (/샵N|엔에이치엔/.test(s)) return '스마트스토어';
   if (/오늘의집|버킷플레이스/.test(s)) return '오늘의집';
-  if (/컴퓨존|compuzone/i.test(s)) return '컴퓨존';
   // 폴백 정리만
   return s.replace(/^오픈마켓\(/, '').replace(/\)$/, '').replace(/라인$/, '');
 }
@@ -994,7 +999,7 @@ function isKnownChannel(shop) {
 const GROUP_CHANNELS = {
   '쿠팡': ['쿠팡_로켓', '쿠팡_일반', '나비엠알오', '십일번가', '지마켓', '토스'],
   '샵N': ['스마트스토어', '오늘의집'],
-  '컴퓨존': ['컴퓨존'],
+  '컴퓨존': ['가산재고', '용산출고'],
 };
 
 // ─────────────── 배송비 그룹 (DEL-매출배XXX 품목코드 매핑) ───────────────
@@ -1513,7 +1518,8 @@ function processSalesStatus(filename, wb) {
       if (m) model = m[1];
     }
     const shop = r[2] || '';
-    const ch = channelMap(shop);
+    const remark = r[14] || '';
+    const ch = channelMap(shop, remark);
     // 채널 → 그룹. 매핑 안 된 채널은 헤더 기반 default 또는 '쿠팡'으로 폴백
     let txnGroup = channelToGroup(ch) || defaultGroup;
     if (!txnGroup) {
@@ -1535,7 +1541,9 @@ function processSalesStatus(filename, wb) {
       vat: r[8] || 0,
       total: r[9] || 0,
       cost_unit: r[10] || 0,
+      warehouse: r[11] || '',  // 창고
       group_name: r[13] || '',
+      remark: r[14] || '',  // 발송수단 및 비고사항 (컴퓨존 가산재고/용산출고 분류용)
     };
     if (!txnsByDateGroup[dateStr]) txnsByDateGroup[dateStr] = {};
     if (!txnsByDateGroup[dateStr][txnGroup]) txnsByDateGroup[dateStr][txnGroup] = [];
@@ -1554,7 +1562,7 @@ function processSalesStatus(filename, wb) {
     const chMap = {};
     GROUP_CHANNELS[group].forEach(c => chMap[c] = { channel: c, qty: 0, amount: 0, profit: 0 });
     for (const t of txns) {
-      const ch = channelMap(t.shop);
+      const ch = channelMap(t.shop, t.remark);
       if (!chMap[ch]) chMap[ch] = { channel: ch, qty: 0, amount: 0, profit: 0 };
       const isDelivery = String(t.item_code).startsWith('DEL-');
       const cost = (t.cost_unit || 0) * (t.qty || 0);
@@ -1573,7 +1581,7 @@ function processSalesStatus(filename, wb) {
       if (!t.model) continue;
       if (String(t.item_code).startsWith('DEL-')) continue;
       if (/판매장려금/.test(String(t.group_name))) continue;
-      const ch = channelMap(t.shop);
+      const ch = channelMap(t.shop, t.remark);
       const k = String(t.model);
       if (!prodMap[k]) prodMap[k] = { name: k, qty: 0, revenue_amount: 0, cost_amount: 0 };
       prodMap[k].qty += t.qty;
