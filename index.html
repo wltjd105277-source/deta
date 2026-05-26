@@ -3933,30 +3933,30 @@ function buildReportSheet(slot, cg, date) {
   ]);
   // 매 상품 행 매출 셀 병합 + 우측 정렬 (원본 양식 재현)
   ws['!merges'] = ws['!merges'] || [];
-  // 헤더 R3의 매출 라벨 (납품가 매출)도 두 컬럼에 걸쳐 표시
+  // 헤더 R3 매출 라벨 (납품가 매출) 병합
   ws['!merges'].push({ s:{r:2, c:12}, e:{r:2, c:13} });   // M3-N3
   ws['!merges'].push({ s:{r:2, c:15}, e:{r:2, c:16} });   // P3-Q3
   ws['!merges'].push({ s:{r:2, c:18}, e:{r:2, c:19} });   // S3-T3
-  // 상품 행 (R4 ~ R{sumRow}) 매 행 병합 + 정렬
+  // 상품 행 (R4 ~ R{sumRow-1}) 매 행 병합. 합계 행은 별도 처리.
   const _alignRight = { horizontal: 'right', vertical: 'center' };
-  for (let r = 3; r <= sumRow - 1; r++) {
-    // M-N (전월 매출), P-Q (당월 매출), S-T (일일 매출) 병합
-    ws['!merges'].push({ s:{r, c:12}, e:{r, c:13} });
-    ws['!merges'].push({ s:{r, c:15}, e:{r, c:16} });
-    ws['!merges'].push({ s:{r, c:18}, e:{r, c:19} });
-    // 병합된 셀의 좌측 (M/P/S)에 우측 정렬 + 셀 자체에 alignment 명시
+  const _mergeRow = (r0) => {
+    ws['!merges'].push({ s:{r:r0, c:12}, e:{r:r0, c:13} });
+    ws['!merges'].push({ s:{r:r0, c:15}, e:{r:r0, c:16} });
+    ws['!merges'].push({ s:{r:r0, c:18}, e:{r:r0, c:19} });
     ['M','P','S'].forEach(colLetter => {
-      const ref = `${colLetter}${r+1}`;
+      const ref = `${colLetter}${r0+1}`;
       if (ws[ref]) {
         ws[ref].s = ws[ref].s || {};
         ws[ref].s.alignment = Object.assign({}, ws[ref].s.alignment || {}, _alignRight);
       }
     });
+  };
+  // R4 ~ R{sumRow-1} 상품 행 (합계 행 제외)
+  for (let r = 3; r <= sumRow - 2; r++) {
+    _mergeRow(r);
   }
-  // 합계 행도 동일하게 병합 + 정렬
-  ws['!merges'].push({ s:{r: sumRow - 1, c:12}, e:{r: sumRow - 1, c:13} });
-  ws['!merges'].push({ s:{r: sumRow - 1, c:15}, e:{r: sumRow - 1, c:16} });
-  ws['!merges'].push({ s:{r: sumRow - 1, c:18}, e:{r: sumRow - 1, c:19} });
+  // 합계 행 (R{sumRow}) 별도 병합
+  _mergeRow(sumRow - 1);
   return ws;
 }
 
