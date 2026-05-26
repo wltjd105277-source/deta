@@ -3990,7 +3990,7 @@ function setF(ws, ref, formula, value) {
 }
 
 
-// 숫자 셀에 천단위 콤마 자동 적용 + 0은 빈칸 처리 (소수점 제거: 정수 반올림)
+// 숫자 셀에 천단위 콤마 자동 적용 + 0은 빈칸 + 마이너스는 빨간색
 function formatNumbers(ws, percentCols) {
   if (!ws['!ref']) return ws;
   const range = XLSX.utils.decode_range(ws['!ref']);
@@ -4000,19 +4000,56 @@ function formatNumbers(ws, percentCols) {
       const cell = ws[ref];
       if (cell && typeof cell.v === 'number') {
         if (cell.v === 0) {
-          // 0 → 빈칸 (시각적으로 깔끔)
           delete ws[ref];
           continue;
         }
         if (percentCols && percentCols.includes(c)) {
-          cell.z = '0%';   // 백분율: 정수
+          cell.z = '0%';
         } else {
-          cell.z = '#,##0'; // 일반 숫자: 정수 (소수점은 Excel이 반올림 표시)
+          cell.z = '#,##0';
+        }
+        // 마이너스 값 → 빨간색
+        if (cell.v < 0) {
+          cell.s = cell.s || {};
+          cell.s.font = Object.assign({}, cell.s.font || {}, { color: { rgb: 'DC2626' } });
         }
       }
     }
   }
   return ws;
+}
+
+// 헤더 행에 진한 파란색 배경 + 흰 글자 + 굵게
+function styleHeaderRow(ws, rowIndex0Based, options) {
+  if (!ws['!ref']) return;
+  const range = XLSX.utils.decode_range(ws['!ref']);
+  const r = rowIndex0Based;
+  const bgColor = (options && options.bgColor) || '4F46E5';  // 진한 보라/파랑
+  for (let c = range.s.c; c <= range.e.c; c++) {
+    const ref = XLSX.utils.encode_cell({ r, c });
+    if (!ws[ref]) ws[ref] = { t: 's', v: '' };
+    ws[ref].s = ws[ref].s || {};
+    ws[ref].s.font = Object.assign({}, ws[ref].s.font || {}, { bold: true, color: { rgb: 'FFFFFF' } });
+    ws[ref].s.fill = { patternType: 'solid', fgColor: { rgb: bgColor } };
+    ws[ref].s.alignment = Object.assign({}, ws[ref].s.alignment || {}, { horizontal: 'center', vertical: 'center' });
+  }
+  // 행 높이도 약간 증가
+  ws['!rows'] = ws['!rows'] || [];
+  ws['!rows'][r] = Object.assign(ws['!rows'][r] || {}, { hpt: 22 });
+}
+
+// 합계/총합 행에 연한 노랑 배경 + 굵게
+function styleTotalRow(ws, rowIndex0Based) {
+  if (!ws['!ref']) return;
+  const range = XLSX.utils.decode_range(ws['!ref']);
+  const r = rowIndex0Based;
+  for (let c = range.s.c; c <= range.e.c; c++) {
+    const ref = XLSX.utils.encode_cell({ r, c });
+    if (!ws[ref]) ws[ref] = { t: 's', v: '' };
+    ws[ref].s = ws[ref].s || {};
+    ws[ref].s.font = Object.assign({}, ws[ref].s.font || {}, { bold: true });
+    ws[ref].s.fill = { patternType: 'solid', fgColor: { rgb: 'FEF3C7' } };  // 연한 노랑
+  }
 }
 
 function buildIlilSheet(slot, cg, isMonthly) {
@@ -4037,7 +4074,9 @@ function buildIlilSheet(slot, cg, isMonthly) {
   });
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   ws['!cols'] = [{wch:18},{wch:12},{wch:14},{wch:14}];
-  return borderAll(formatNumbers(ws));
+  const out = borderAll(formatNumbers(ws));
+  styleHeaderRow(out, 0);  // R1 = 헤더
+  return out;
 }
 
 function buildSeriesSheet(slot, isMonthly) {
@@ -4052,7 +4091,9 @@ function buildSeriesSheet(slot, isMonthly) {
     });
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   ws['!cols'] = [{wch:22},{wch:12},{wch:14},{wch:14},{wch:2},{wch:22}];
-  return borderAll(formatNumbers(ws));
+  const out = borderAll(formatNumbers(ws));
+  styleHeaderRow(out, 0);
+  return out;
 }
 
 function buildHowToSheet() {
@@ -4090,7 +4131,9 @@ function buildSheet1(slot) {
     .forEach(p => aoa.push([p.name, p.qty || 0, p.revenue_amount || 0]));
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   ws['!cols'] = [{wch:22},{wch:12},{wch:14}];
-  return borderAll(formatNumbers(ws));
+  const out = borderAll(formatNumbers(ws));
+  styleHeaderRow(out, 0);
+  return out;
 }
 
 // ─────────── 매출리스트 시트 빌더 ───────────
