@@ -2036,7 +2036,90 @@ function render() {
     return;
   }
 
-  const dayData = store[currentDate];
+  // ───────── 전체 view 확장: 같은 달 다른 날 업로드 + GROUP_CHANNELS 정의 그룹 ─────────
+  // dayData는 store[currentDate] 그대로지만, 같은 달 다른 날 업로드된 그룹과
+  // GROUP_CHANNELS 정의된 그룹은 합성 슬롯으로 추가해서 항상 표시되도록.
+  const _origDayData = store[currentDate];
+  let dayData = { ..._origDayData };
+  {
+    const _monthKey = currentDate.slice(0, 7);
+    const _groupsToAdd = new Set();
+    // 1) 이번 달 ≤ currentDate에 업로드된 모든 그룹
+    for (const d of Object.keys(store)) {
+      if (!d.startsWith(_monthKey) || d > currentDate) continue;
+      Object.keys(store[d] || {}).forEach(g => _groupsToAdd.add(g));
+    }
+    // 2) GROUP_CHANNELS 정의된 그룹 (쿠팡/샵N/컴퓨존)
+    Object.keys(GROUP_CHANNELS).forEach(g => _groupsToAdd.add(g));
+    // 3) 오늘 데이터 없는 그룹에 대해 합성 슬롯 추가
+    for (const g of _groupsToAdd) {
+      if (dayData[g]) continue;
+      // 이번 달 최신 슬롯 찾기 (≤ currentDate)
+      let _latestDate = null;
+      for (const d of Object.keys(store)) {
+        if (d > currentDate || !d.startsWith(_monthKey)) continue;
+        if (store[d] && store[d][g] && (!_latestDate || d > _latestDate)) {
+          _latestDate = d;
+        }
+      }
+      const _todayDayProgress = (() => {
+        const [yy, mm] = _monthKey.split('-').map(Number);
+        const totalDays = new Date(yy, mm, 0).getDate();
+        return parseInt(currentDate.slice(8, 10)) / totalDays;
+      })();
+      if (_latestDate) {
+        // 이번 달 다른 날 업로드 있음 → 월 누적은 유지, 일일은 0으로
+        const orig = store[_latestDate][g];
+        const _emptyChannels = (orig.detail?.monthly_channels || []).map(c => ({
+          channel: c.channel, qty: 0, amount: 0, profit: 0
+        }));
+        dayData[g] = {
+          ...orig,
+          detail: {
+            ...(orig.detail || {}),
+            daily_revenue: 0,
+            daily_goal: 0,
+            daily_achievement: 0,
+            daily_channels: _emptyChannels,
+            day_progress: _todayDayProgress,
+          },
+          _products_today: [],
+          _channels_today: [],
+          _files: [],  // 오늘은 업로드 안 됨
+          _transactions: orig._transactions || [],
+          _aggregated_from: _latestDate,
+          _is_synthetic_today: true,
+        };
+      } else if (GROUP_CHANNELS[g]) {
+        // 이번 달 전혀 없음 → 0원 스텁 (정의된 그룹만)
+        const _zeroChannels = GROUP_CHANNELS[g].map(ch => ({
+          channel: ch, qty: 0, amount: 0, profit: 0
+        }));
+        dayData[g] = {
+          detail: {
+            monthly_revenue: 0,
+            monthly_goal: 0,
+            month_achievement: 0,
+            monthly_channels: _zeroChannels,
+            daily_revenue: 0,
+            daily_goal: 0,
+            daily_achievement: 0,
+            daily_channels: _zeroChannels,
+            day_progress: _todayDayProgress,
+            month_forecast: 0,
+            daily_trend: [],
+          },
+          products: [],
+          _products_today: [],
+          _channels_today: [],
+          _files: [],
+          _transactions: [],
+          _source: '판매현황',
+          _empty_stub: true,
+        };
+      }
+    }
+  }
   const channels = Object.keys(dayData);
 
   title.textContent = formatDateDisplay(currentDate) + ' 매출 리포트';
@@ -2044,14 +2127,24 @@ function render() {
   const uniqueFileNames = [...new Set(allFileNames)];
   subtitle.innerHTML = uniqueFileNames.map(n => `<span class="file-tag">${n}</span>`).join('') || '데이터 없음';
 
-  // 그룹 탭 (전체 / 쿠팡 / 샵N) + 사이트별 탭 (스마트스토어, 지마켓 등)
-  // 현재 일자에 존재하는 모든 서브채널 수집
+  // 그룹 탭 (전체 / 쿠팡 / 샵N / 컴퓨존) + 사이트별 탭 (스마트스토어, 지마켓 등)
+  // 서브채널 수집: 일일/월간 모두 + GROUP_CHANNELS 정의분
   const subChannelsSet = new Set();
   for (const cg of channels) {
     const slot = dayData[cg];
-    (slot._channels_today || slot.detail?.daily_channels || []).forEach(c => {
+    if (!slot) continue;
+    // 일일 채널 (실제 데이터)
+    (slot._channels_today || []).forEach(c => {
       if (c.amount !== 0 || c.qty !== 0) subChannelsSet.add(c.channel);
     });
+    // 월간 채널 (synthetic 그룹은 이걸로 채워짐)
+    (slot.detail?.monthly_channels || []).forEach(c => {
+      if (c.amount !== 0 || c.qty !== 0) subChannelsSet.add(c.channel);
+    });
+    // 데이터 없는 그룹(stub)도 GROUP_CHANNELS 정의 sub는 표시
+    if (slot._empty_stub && GROUP_CHANNELS[cg]) {
+      GROUP_CHANNELS[cg].forEach(ch => subChannelsSet.add(ch));
+    }
   }
   const subChannels = Array.from(subChannelsSet);
 
@@ -2062,7 +2155,11 @@ function render() {
     groupChs.forEach(ch => subToGroup[ch] = cg);
     // 데이터에 있지만 정의에 없는 채널도 매핑
     const slot = dayData[cg];
-    (slot._channels_today || slot.detail?.daily_channels || []).forEach(c => {
+    if (!slot) continue;
+    (slot._channels_today || []).forEach(c => {
+      if (!subToGroup[c.channel]) subToGroup[c.channel] = cg;
+    });
+    (slot.detail?.monthly_channels || []).forEach(c => {
       if (!subToGroup[c.channel]) subToGroup[c.channel] = cg;
     });
   }
@@ -2141,7 +2238,8 @@ function render() {
 
   // 월 목표 설정 패널 (판매현황 기반 데이터에 한해, 사이트별 필터 시는 숨김)
   const monthKey = currentDate.slice(0, 7);
-  const goalGroups = viewChannels.filter(cg => store[currentDate][cg]?._source === '판매현황');
+  // augmented dayData 기준 - 이번 달 어딘가 업로드된 그룹 포함 (0원 stub 제외)
+  const goalGroups = viewChannels.filter(cg => dayData[cg]?._source === '판매현황' && !dayData[cg]?._empty_stub);
   let html = '';
   if (goalGroups.length > 0 && !filterCh) {
     html += `<div class="panel" style="margin-bottom:12px;display:flex;flex-wrap:wrap;gap:14px;align-items:center;padding:14px 18px;">
@@ -2163,7 +2261,8 @@ function render() {
     // (광고는 매출 0원인 날에도 나가므로 monthly 기준 사용)
     const adChannels = new Set();
     for (const cg of goalGroups) {
-      const slot = store[currentDate][cg];
+      const slot = dayData[cg];
+      if (!slot) continue;
       // 월간 누적 채널 우선
       (slot.detail?.monthly_channels || []).forEach(c => {
         if (c.amount !== 0 || c.qty !== 0) adChannels.add(c.channel);
@@ -2203,10 +2302,16 @@ function render() {
   // KPI 카드 - 배송비 차감 마진 (그룹별 합산)
   let _netMargin_today = 0, _netMargin_month = 0;
   for (const cg of viewChannels) {
-    const slot = store[currentDate] && store[currentDate][cg];
-    if (!slot || slot._source !== '판매현황') continue;
-    _netMargin_today += computeNetMargin(slot);
-    _netMargin_month += computeMonthNetMargin(currentDate, cg);
+    // 오늘 마진: 실제 오늘 업로드된 슬롯만 (synthetic 제외)
+    const todaySlot = store[currentDate] && store[currentDate][cg];
+    if (todaySlot && todaySlot._source === '판매현황') {
+      _netMargin_today += computeNetMargin(todaySlot);
+    }
+    // 월 마진: dayData 기준 (augmented - 이번 달 어디서든 업로드된 그룹 포함)
+    const slot = dayData[cg];
+    if (slot && slot._source === '판매현황' && !slot._empty_stub) {
+      _netMargin_month += computeMonthNetMargin(currentDate, cg);
+    }
   }
 
   // KPI 카드
