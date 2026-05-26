@@ -423,6 +423,7 @@
       <button class="btn" id="btnExport">💾 데이터 백업 (JSON)</button>
       <button class="btn" id="btnImport">📥 백업 가져오기</button>
       <input type="file" id="importInput" accept=".json" style="display:none">
+      <button class="btn" id="btnRebuild" style="background:#fbbf24;color:#fff;">🔄 채널 재분류 (룰 변경 적용)</button>
       <button class="btn danger" id="btnClear">🗑 모든 데이터 삭제</button>
     </div>
   </aside>
@@ -4381,6 +4382,20 @@ function buildShoppingMall(slot) {
 }
 
 document.getElementById('btnImport').addEventListener('click', () => document.getElementById('importInput').click());
+document.getElementById('btnRebuild').addEventListener('click', () => {
+  if (!confirm('현재 채널 매핑 규칙으로 모든 슬롯을 재분류합니다. 진행하시겠습니까?')) return;
+  try {
+    rebuildAllSlotsFromTransactions();
+    recomputeAggregates();
+    saveStore();
+    renderDateList();
+    render();
+    showToast('채널 재분류 완료', 'success');
+  } catch (e) {
+    console.error(e);
+    showToast('재분류 실패: ' + e.message, 'error');
+  }
+});
 document.getElementById('importInput').addEventListener('change', async e => {
   const file = e.target.files[0]; if (!file) return;
   try {
