@@ -4200,7 +4200,9 @@ function buildListSheet(slot, currentDate) {
     {wch:6},{wch:11},{wch:11},{wch:11},
     {wch:9},{wch:11},{wch:13}
   ];
-  return borderAll(formatNumbers(ws));
+  const out = borderAll(formatNumbers(ws));
+  styleHeaderRow(out, 0);
+  return out;
 }
 
 function buildIlbyeolMaechul(slot) {
