@@ -804,7 +804,7 @@ function rebuildAllSlotsFromTransactions() {
   const byDG = {};  // {date: {group: [txns]}}
   for (const t of allTxns) {
     const date = t._date;
-    const ch = channelMap(t.shop);
+    const ch = channelMapTxn(t);
     let group = channelToGroup(ch);
     if (!group) {
       if (/컴퓨존|compuzone/i.test(t.shop || '')) group = '컴퓨존';
@@ -961,6 +961,13 @@ function saveCustomChannelMap(map) {
       updated_at: new Date().toISOString(),
     }).then(() => {}).catch(e => console.error('custom_channel_map sync failed:', e));
   }
+}
+
+// 트랜잭션 객체로 채널 결정 (remark, desc, group_name 모두 hint로 활용)
+function channelMapTxn(t) {
+  if (!t) return '기타';
+  const hint = [t.remark, t.desc, t.group_name, t.warehouse].filter(Boolean).join(' | ');
+  return channelMap(t.shop, hint);
 }
 
 function channelMap(shop, remark) {
@@ -1520,7 +1527,11 @@ function processSalesStatus(filename, wb) {
     }
     const shop = r[2] || '';
     const remark = r[14] || '';
-    const ch = channelMap(shop, remark);
+    const desc_r = r[3] || '';
+    const group_r = r[13] || '';
+    const warehouse_r = r[11] || '';
+    const hint = [remark, desc_r, group_r, warehouse_r].filter(Boolean).join(' | ');
+    const ch = channelMap(shop, hint);
     // 채널 → 그룹. 매핑 안 된 채널은 헤더 기반 default 또는 '쿠팡'으로 폴백
     let txnGroup = channelToGroup(ch) || defaultGroup;
     if (!txnGroup) {
@@ -1563,7 +1574,7 @@ function processSalesStatus(filename, wb) {
     const chMap = {};
     GROUP_CHANNELS[group].forEach(c => chMap[c] = { channel: c, qty: 0, amount: 0, profit: 0 });
     for (const t of txns) {
-      const ch = channelMap(t.shop, t.remark);
+      const ch = channelMapTxn(t);
       if (!chMap[ch]) chMap[ch] = { channel: ch, qty: 0, amount: 0, profit: 0 };
       const isDelivery = String(t.item_code).startsWith('DEL-');
       const cost = (t.cost_unit || 0) * (t.qty || 0);
@@ -1582,7 +1593,7 @@ function processSalesStatus(filename, wb) {
       if (!t.model) continue;
       if (String(t.item_code).startsWith('DEL-')) continue;
       if (/판매장려금/.test(String(t.group_name))) continue;
-      const ch = channelMap(t.shop, t.remark);
+      const ch = channelMapTxn(t);
       const k = String(t.model);
       if (!prodMap[k]) prodMap[k] = { name: k, qty: 0, revenue_amount: 0, cost_amount: 0 };
       prodMap[k].qty += t.qty;
