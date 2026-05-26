@@ -2071,9 +2071,11 @@ function render() {
     });
   }
 
+  // 그룹 탭(첫째 줄)에서 '컴퓨존'은 제외 (서브만 둘째 줄에 표시)
+  const groupTabsList = channels.filter(c => c !== '컴퓨존');
   tabs.innerHTML = `
     <div class="ch-tab ${currentChannel === 'all' ? 'active' : ''}" data-ch="all">전체</div>
-    ${channels.map(c => `<div class="ch-tab ${currentChannel === c ? 'active' : ''}" data-ch="${c}">${c}</div>`).join('')}
+    ${groupTabsList.map(c => `<div class="ch-tab ${currentChannel === c ? 'active' : ''}" data-ch="${c}">${c}</div>`).join('')}
     ${subChannels.length > 0 ? '<div style="width:1px;height:20px;background:var(--border);margin:0 4px;"></div>' : ''}
     ${subChannels.map(sc => `<div class="ch-tab sub ${currentChannel === sc ? 'active' : ''}" data-ch="${sc}" style="font-size:12px;padding:6px 12px;">${sc}</div>`).join('')}
     <div style="margin-left:auto;"></div>
