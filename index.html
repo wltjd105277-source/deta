@@ -3895,32 +3895,32 @@ function buildReportSheet(slot, cg, date) {
   setF(ws, `W${chTotalRow}`, `SUM(W${_r0}:W${_r1})`, _sumPrev.amount > 0 ? _totalForecast - _sumPrev.amount : '');
   setF(ws, `X${chTotalRow}`, `IFERROR(V${chTotalRow}/D${chTotalRow}-1, "")`, _sumPrev.amount > 0 ? _totalForecast / _sumPrev.amount - 1 : '');
 
-  // 컬럼 너비 - 데이터 컬럼은 충분히, 빈 컬럼은 좁게
+  // 컬럼 너비 - 원본 양식 그대로 (좁고 균등)
   ws['!cols'] = [
-    {wch:2.5},                // A
-    {wch:22},                 // B (라벨)
-    {wch:14},                 // C (값)
-    {wch:12},                 // D (채널 표 납품가 매출 전월)
-    {wch:1},                  // E (빈)
-    {wch:12},                 // F (채널 표 마진 전월)
-    {wch:1},                  // G (빈)
-    {wch:6},                  // H (마진율)
-    {wch:18},                 // I (상품 표 품목)
-    {wch:12},                 // J (채널 표 당월 납품가)
-    {wch:1},                  // K (빈)
-    {wch:8},                  // L (전월 수량)
-    {wch:14},                 // M (전월 매출)
-    {wch:1},                  // N (빈)
-    {wch:8},                  // O (당월 수량)
-    {wch:14},                 // P (당월 매출)
-    {wch:1},                  // Q (빈)
-    {wch:8},                  // R (일일 수량)
-    {wch:14},                 // S (일일 매출)
-    {wch:1},                  // T (빈)
-    {wch:1},                  // U (빈)
-    {wch:13},                 // V (당월마감)
-    {wch:13},                 // W (전월 vs 당월)
-    {wch:8}                   // X (증감률)
+    {wch:2.5},   // A
+    {wch:13},    // B
+    {wch:6.6},   // C
+    {wch:8.25},  // D
+    {wch:6.5},   // E
+    {wch:7.5},   // F
+    {wch:6.5},   // G
+    {wch:6.6},   // H
+    {wch:6.6},   // I
+    {wch:6.5},   // J
+    {wch:4.4},   // K
+    {wch:6.6},   // L
+    {wch:8.75},  // M
+    {wch:6.9},   // N
+    {wch:7.25},  // O
+    {wch:6.5},   // P
+    {wch:4},     // Q
+    {wch:6.6},   // R
+    {wch:6.5},   // S
+    {wch:8.6},   // T
+    {wch:1.4},   // U
+    {wch:13.4},  // V
+    {wch:13},    // W
+    {wch:7.9}    // X
   ];
   // 백분율 컬럼: E19, C19, C21, C26, X{*}
   // formatNumbers는 셀 단위가 아니라 컬럼 단위로 처리하므로 해당 셀에 직접 적용
@@ -3950,8 +3950,32 @@ function buildReportSheet(slot, cg, date) {
     // 채널 표 (B-X, 헤더1~종합)
     { range: `B${chHeader1Row}:X${chTotalRow}` },
   ]);
-  // 매 행 병합은 제거 - 데이터 컬럼 너비를 충분히 키워서 해결.
-  // 헤더 R2 병합(L-M, O-P, R-S)은 이미 위에서 적용됨.
+  // 매 상품 행 매출 셀 병합 + 우측 정렬 (원본 양식 재현)
+  ws['!merges'] = ws['!merges'] || [];
+  // 헤더 R3의 매출 라벨 (납품가 매출)도 두 컬럼에 걸쳐 표시
+  ws['!merges'].push({ s:{r:2, c:12}, e:{r:2, c:13} });   // M3-N3
+  ws['!merges'].push({ s:{r:2, c:15}, e:{r:2, c:16} });   // P3-Q3
+  ws['!merges'].push({ s:{r:2, c:18}, e:{r:2, c:19} });   // S3-T3
+  // 상품 행 (R4 ~ R{sumRow}) 매 행 병합 + 정렬
+  const _alignRight = { horizontal: 'right', vertical: 'center' };
+  for (let r = 3; r <= sumRow - 1; r++) {
+    // M-N (전월 매출), P-Q (당월 매출), S-T (일일 매출) 병합
+    ws['!merges'].push({ s:{r, c:12}, e:{r, c:13} });
+    ws['!merges'].push({ s:{r, c:15}, e:{r, c:16} });
+    ws['!merges'].push({ s:{r, c:18}, e:{r, c:19} });
+    // 병합된 셀의 좌측 (M/P/S)에 우측 정렬 + 셀 자체에 alignment 명시
+    ['M','P','S'].forEach(colLetter => {
+      const ref = `${colLetter}${r+1}`;
+      if (ws[ref]) {
+        ws[ref].s = ws[ref].s || {};
+        ws[ref].s.alignment = Object.assign({}, ws[ref].s.alignment || {}, _alignRight);
+      }
+    });
+  }
+  // 합계 행도 동일하게 병합 + 정렬
+  ws['!merges'].push({ s:{r: sumRow - 1, c:12}, e:{r: sumRow - 1, c:13} });
+  ws['!merges'].push({ s:{r: sumRow - 1, c:15}, e:{r: sumRow - 1, c:16} });
+  ws['!merges'].push({ s:{r: sumRow - 1, c:18}, e:{r: sumRow - 1, c:19} });
   return ws;
 }
 
