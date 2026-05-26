@@ -968,11 +968,11 @@ function channelMap(shop, remark) {
   // 사용자 매핑 우선
   const custom = getCustomChannelMap();
   if (custom[s] && custom[s].channel) return custom[s].channel;
-  // 컴퓨존 - 비고사항(remark) '가산재고' 키워드로 세분화
+  // 컴퓨존 - 비고사항(remark) '가산재고' 키워드로 세분화 (판매처 명시)
   if (/컴퓨존|compuzone/i.test(s)) {
     const rm = String(remark || '');
-    if (/가산재고/.test(rm)) return '가산재고';
-    return '용산출고';  // 그 외 전부
+    if (/가산재고/.test(rm)) return '컴퓨존_가산재고';
+    return '컴퓨존_용산출고';  // 그 외 전부
   }
   // 기존 키워드 규칙 ('쿠팡일반' 명시는 포워드벤처스보다 우선 - 분류 정확도)
   if (/쿠팡일반|쿠팡_일반/.test(s)) return '쿠팡_일반';
@@ -999,7 +999,7 @@ function isKnownChannel(shop) {
 const GROUP_CHANNELS = {
   '쿠팡': ['쿠팡_로켓', '쿠팡_일반', '나비엠알오', '십일번가', '지마켓', '토스'],
   '샵N': ['스마트스토어', '오늘의집'],
-  '컴퓨존': ['가산재고', '용산출고'],
+  '컴퓨존': ['컴퓨존_가산재고', '컴퓨존_용산출고'],
 };
 
 // ─────────────── 배송비 그룹 (DEL-매출배XXX 품목코드 매핑) ───────────────
