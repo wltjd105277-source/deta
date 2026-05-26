@@ -3650,6 +3650,8 @@ function buildReportSheet(slot, cg, date) {
   aoa[1][21] = '당월마감';
   aoa[1][22] = '전월 vs 당월';
   aoa[1][23] = '증감률';
+  // 헤더 셀 병합 (수량+납품가매출 2칸씩)
+  // R2: L-M(전월 누적), O-P(당월 누적), R-S(일일) 병합용 - aoa_to_sheet 후 ws에 !merges 추가
   aoa[2][11] = '수량';
   aoa[2][12] = '납품가 매출';
   aoa[2][14] = '수량';
@@ -3767,6 +3769,10 @@ function buildReportSheet(slot, cg, date) {
   ws['!merges'].push({ s:{r:chHeader1Row-1, c:2}, e:{r:chHeader1Row-1, c:7} });   // C-H 전월
   ws['!merges'].push({ s:{r:chHeader1Row-1, c:8}, e:{r:chHeader1Row-1, c:13} });  // I-N 당월
   ws['!merges'].push({ s:{r:chHeader1Row-1, c:14}, e:{r:chHeader1Row-1, c:19} }); // O-T 일일
+  // 상품 표 헤더 병합 (R2): L-M(전월 누적), O-P(당월 누적), R-S(일일)
+  ws['!merges'].push({ s:{r:1, c:11}, e:{r:1, c:12} });  // L-M 전월 누적
+  ws['!merges'].push({ s:{r:1, c:14}, e:{r:1, c:15} });  // O-P 당월 누적
+  ws['!merges'].push({ s:{r:1, c:17}, e:{r:1, c:18} });  // R-S 일일
   // 행 높이: 헤더 두 줄을 적절히 보이게 설정
   ws['!rows'] = ws['!rows'] || [];
   ws['!rows'][chHeader1Row-1] = { hpt: 22 };
@@ -3885,13 +3891,13 @@ function buildReportSheet(slot, cg, date) {
   setF(ws, `W${chTotalRow}`, `SUM(W${_r0}:W${_r1})`, _sumPrev.amount > 0 ? _totalForecast - _sumPrev.amount : '');
   setF(ws, `X${chTotalRow}`, `IFERROR(V${chTotalRow}/D${chTotalRow}-1, "")`, _sumPrev.amount > 0 ? _totalForecast / _sumPrev.amount - 1 : '');
 
-  // 컬럼 너비 (상품 표 + 채널 표 양쪽에 맞춤)
+  // 컬럼 너비 (구분/간격 컬럼은 매우 좁게 - 1)
   ws['!cols'] = [
-    {wch:2},{wch:22},{wch:14},{wch:14},{wch:10},{wch:14},{wch:2},{wch:6},
-    {wch:22},{wch:14},{wch:2},
-    {wch:14},{wch:14},{wch:6},
-    {wch:8},{wch:14},{wch:2},
-    {wch:14},{wch:14},{wch:6},{wch:2},
+    {wch:2},{wch:22},{wch:14},{wch:14},{wch:1},{wch:14},{wch:1},{wch:5},
+    {wch:22},{wch:14},{wch:1},
+    {wch:14},{wch:14},{wch:5},
+    {wch:8},{wch:14},{wch:1},
+    {wch:14},{wch:14},{wch:5},{wch:1},
     {wch:14},{wch:14},{wch:10}
   ];
   // 백분율 컬럼: E19, C19, C21, C26, X{*}
