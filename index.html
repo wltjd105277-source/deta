@@ -2056,6 +2056,8 @@ function render() {
     ${channels.map(c => `<div class="ch-tab ${currentChannel === c ? 'active' : ''}" data-ch="${c}">${c}</div>`).join('')}
     ${subChannels.length > 0 ? '<div style="width:1px;height:20px;background:var(--border);margin:0 4px;"></div>' : ''}
     ${subChannels.map(sc => `<div class="ch-tab sub ${currentChannel === sc ? 'active' : ''}" data-ch="${sc}" style="font-size:12px;padding:6px 12px;">${sc}</div>`).join('')}
+    <div style="margin-left:auto;"></div>
+    <button id="btnCompareChannels" style="padding:6px 14px;background:#fbbf24;color:#fff;border:none;border-radius:8px;font-size:12px;cursor:pointer;font-weight:600;white-space:nowrap;">🆚 채널 비교</button>
   `;
   tabs.querySelectorAll('.ch-tab').forEach(el => {
     el.addEventListener('click', () => {
@@ -2063,6 +2065,15 @@ function render() {
       render();
     });
   });
+  // 비교 버튼 핸들러
+  const cmpBtn = document.getElementById('btnCompareChannels');
+  if (cmpBtn) {
+    cmpBtn.addEventListener('click', () => {
+      const allCgs = Object.keys(dayData);
+      const subList = Array.from(subChannelsSet);
+      showChannelComparisonModal([...allCgs, ...subList]);
+    });
+  }
 
   // 채널 보기 결정
   const isSubChannel = currentChannel !== 'all' && !channels.includes(currentChannel);
@@ -3232,6 +3243,171 @@ function showProductChannelBreakdown(productName, period) {
 // channelMap 함수와 이름 충돌 방지용 alias (channelMap은 함수명이라 변수로 못씀)
 function channelMap_get(shop) {
   return channelMap(shop);
+}
+
+// ────────── 채널 비교 모달 ──────────
+function showChannelComparisonModal(availableChannels) {
+  if (!currentDate || !store[currentDate]) {
+    showToast('일자가 선택되지 않았습니다', 'error');
+    return;
+  }
+  // 기본 좌/우 선택
+  const _left = currentChannel === 'all' ? (availableChannels[0] || 'all') : currentChannel;
+  const _right = '전체';
+  const optionsHtml = ['<option value="__all__">전체 합산</option>',
+    ...availableChannels.map(c => `<option value="${c}">${c}</option>`)
+  ].join('');
+
+  // 기존 모달 제거
+  const old = document.getElementById('channelCompareModal');
+  if (old) old.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'channelCompareModal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1001;display:flex;align-items:center;justify-content:center;padding:20px;';
+  modal.innerHTML = `
+    <div style="background:white;border-radius:12px;max-width:1100px;width:100%;max-height:90vh;overflow:auto;box-shadow:0 10px 30px rgba(0,0,0,0.2);">
+      <div style="padding:18px 22px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:white;z-index:2;">
+        <div style="font-size:16px;font-weight:700;">🆚 채널 비교 (${currentDate})</div>
+        <button class="modal-close-btn" style="background:transparent;border:none;font-size:20px;cursor:pointer;color:var(--text-sub);width:32px;height:32px;border-radius:6px;">×</button>
+      </div>
+      <div style="padding:14px 22px;display:flex;align-items:center;gap:18px;border-bottom:1px solid var(--border);">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:12px;color:var(--text-sub);">좌측:</span>
+          <select id="cmpLeft" style="padding:6px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
+            <option value="__all__">전체 합산</option>
+            ${availableChannels.map(c => `<option value="${c}" ${c === _left ? 'selected' : ''}>${c}</option>`).join('')}
+          </select>
+        </div>
+        <div style="font-size:14px;color:var(--text-sub);">vs</div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:12px;color:var(--text-sub);">우측:</span>
+          <select id="cmpRight" style="padding:6px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px;">
+            <option value="__all__" selected>전체 합산</option>
+            ${availableChannels.map(c => `<option value="${c}">${c}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div id="cmpBody" style="padding:20px 22px;"></div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+
+  function renderComparison() {
+    const leftSel = document.getElementById('cmpLeft').value;
+    const rightSel = document.getElementById('cmpRight').value;
+    document.getElementById('cmpBody').innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+        ${[leftSel, rightSel].map(sel => buildChannelMiniDashboard(sel)).join('')}
+      </div>
+    `;
+  }
+  document.getElementById('cmpLeft').addEventListener('change', renderComparison);
+  document.getElementById('cmpRight').addEventListener('change', renderComparison);
+  renderComparison();
+
+  modal.addEventListener('click', evt => {
+    if (evt.target === modal || evt.target.closest('.modal-close-btn')) modal.remove();
+  });
+}
+
+// 선택된 채널/그룹의 미니 대시보드 (KPI 카드들)
+function buildChannelMiniDashboard(channelKey) {
+  const month = currentDate.slice(0, 7);
+  const dayData = store[currentDate] || {};
+  const groupKeys = Object.keys(dayData).filter(k => dayData[k]?._source === '판매현황');
+
+  // 채널 선택에 따라 viewCgs(그룹) + filterCh(서브채널) 결정
+  let viewCgs = [];
+  let filterCh = null;
+  let label = channelKey;
+  if (channelKey === '__all__') {
+    viewCgs = groupKeys;
+    label = '전체 합산';
+  } else if (groupKeys.includes(channelKey)) {
+    viewCgs = [channelKey];
+  } else {
+    // 서브채널: 어느 그룹에 속하는지 찾아 filterCh로
+    for (const g of groupKeys) {
+      const slot = dayData[g];
+      if (slot._channels_today?.some(c => c.channel === channelKey) ||
+          slot._monthly_products_by_channel?.[channelKey]) {
+        viewCgs = [g];
+        filterCh = channelKey;
+        break;
+      }
+    }
+    if (viewCgs.length === 0) viewCgs = groupKeys;
+  }
+
+  // 일 매출/마진/수량 합산
+  let dayRev = 0, dayMargin = 0, dayQty = 0;
+  let monthRev = 0, monthMargin = 0, monthQty = 0;
+
+  for (const cg of viewCgs) {
+    const slot = dayData[cg];
+    if (!slot) continue;
+    if (filterCh) {
+      // 서브채널 필터
+      const dCh = (slot._channels_today || []).find(c => c.channel === filterCh);
+      if (dCh) {
+        dayRev += dCh.amount || 0;
+        dayMargin += dCh.profit || 0;
+        dayQty += dCh.qty || 0;
+      }
+      const mCh = (slot.detail?.monthly_channels || []).find(c => c.channel === filterCh);
+      if (mCh) {
+        monthRev += mCh.amount || 0;
+        monthMargin += mCh.profit || 0;
+        monthQty += mCh.qty || 0;
+      }
+    } else {
+      // 그룹 전체
+      dayRev += slot._daily_total?.amount || 0;
+      dayMargin += slot._daily_total?.profit || 0;
+      dayQty += slot._daily_total?.qty || 0;
+      monthRev += slot.detail?.monthly_revenue || 0;
+      // 월 마진/수량은 합산용으로 계산
+      const monthlyChs = slot.detail?.monthly_channels || [];
+      monthMargin += monthlyChs.reduce((s,c) => s + (c.profit || 0), 0);
+      monthQty += monthlyChs.reduce((s,c) => s + (c.qty || 0), 0);
+    }
+  }
+
+  const marginRate = monthRev > 0 ? (monthMargin / monthRev * 100).toFixed(1) + '%' : '-';
+
+  return `
+    <div style="border:1px solid var(--border);border-radius:10px;padding:18px;background:var(--bg-sub, #f9fafb);">
+      <div style="font-size:13px;color:var(--text-sub);margin-bottom:6px;">채널</div>
+      <div style="font-size:18px;font-weight:700;margin-bottom:14px;">${label}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div style="background:white;padding:14px;border-radius:8px;border:1px solid var(--border);">
+          <div style="font-size:11px;color:var(--text-sub);">일 매출</div>
+          <div style="font-size:18px;font-weight:700;margin-top:4px;">${fmt.shortWon(dayRev)}</div>
+        </div>
+        <div style="background:white;padding:14px;border-radius:8px;border:1px solid var(--border);">
+          <div style="font-size:11px;color:var(--text-sub);">일 마진</div>
+          <div style="font-size:18px;font-weight:700;margin-top:4px;color:${dayMargin >= 0 ? 'var(--success)' : 'var(--danger)'};">${fmt.shortWon(dayMargin)}</div>
+        </div>
+        <div style="background:white;padding:14px;border-radius:8px;border:1px solid var(--border);">
+          <div style="font-size:11px;color:var(--text-sub);">월 누적 매출</div>
+          <div style="font-size:18px;font-weight:700;margin-top:4px;">${fmt.shortWon(monthRev)}</div>
+        </div>
+        <div style="background:white;padding:14px;border-radius:8px;border:1px solid var(--border);">
+          <div style="font-size:11px;color:var(--text-sub);">월 누적 마진</div>
+          <div style="font-size:18px;font-weight:700;margin-top:4px;color:${monthMargin >= 0 ? 'var(--success)' : 'var(--danger)'};">${fmt.shortWon(monthMargin)}</div>
+        </div>
+        <div style="background:white;padding:14px;border-radius:8px;border:1px solid var(--border);">
+          <div style="font-size:11px;color:var(--text-sub);">월 수량</div>
+          <div style="font-size:18px;font-weight:700;margin-top:4px;">${fmt.num(monthQty)}건</div>
+        </div>
+        <div style="background:white;padding:14px;border-radius:8px;border:1px solid var(--border);">
+          <div style="font-size:11px;color:var(--text-sub);">마진율</div>
+          <div style="font-size:18px;font-weight:700;margin-top:4px;">${marginRate}</div>
+        </div>
+      </div>
+    </div>
+  `;
 }
 // 배송비 매칭 상태 엑셀 다운로드 (click 이벤트, 위임)
 document.body.addEventListener('click', e => {
