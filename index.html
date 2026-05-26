@@ -3895,33 +3895,14 @@ function buildReportSheet(slot, cg, date) {
   setF(ws, `W${chTotalRow}`, `SUM(W${_r0}:W${_r1})`, _sumPrev.amount > 0 ? _totalForecast - _sumPrev.amount : '');
   setF(ws, `X${chTotalRow}`, `IFERROR(V${chTotalRow}/D${chTotalRow}-1, "")`, _sumPrev.amount > 0 ? _totalForecast / _sumPrev.amount - 1 : '');
 
-  // 컬럼 너비 - 원본 양식 그대로 (좁고 균등)
-  ws['!cols'] = [
-    {wch:2.5},   // A
-    {wch:13},    // B
-    {wch:6.6},   // C
-    {wch:8.25},  // D
-    {wch:6.5},   // E
-    {wch:7.5},   // F
-    {wch:6.5},   // G
-    {wch:6.6},   // H
-    {wch:6.6},   // I
-    {wch:6.5},   // J
-    {wch:4.4},   // K
-    {wch:6.6},   // L
-    {wch:8.75},  // M
-    {wch:6.9},   // N
-    {wch:7.25},  // O
-    {wch:6.5},   // P
-    {wch:4},     // Q
-    {wch:6.6},   // R
-    {wch:6.5},   // S
-    {wch:8.6},   // T
-    {wch:1.4},   // U
-    {wch:13.4},  // V
-    {wch:13},    // W
-    {wch:7.9}    // X
-  ];
+  // 컬럼 너비 - 자동 계산 (각 컬럼 데이터 길이 기준)
+  autoFitColumns(ws, { min: 4, max: 28 });
+  // 빈 간격 컬럼은 명시적으로 좁게 고정
+  const _gapCols = [4, 6, 10, 13, 16, 19, 20];  // E,G,K,N,Q,T,U
+  _gapCols.forEach(c => {
+    if (!ws['!cols'][c]) ws['!cols'][c] = {};
+    ws['!cols'][c].wch = 2;
+  });
   // 백분율 컬럼: E19, C19, C21, C26, X{*}
   // formatNumbers는 셀 단위가 아니라 컬럼 단위로 처리하므로 해당 셀에 직접 적용
   formatNumbers(ws);
@@ -3983,6 +3964,46 @@ function buildReportSheet(slot, cg, date) {
 function borderAll(ws) {
   if (!ws || !ws['!ref']) return ws;
   applyBorders(ws, [{ range: ws['!ref'] }]);
+  return ws;
+}
+
+// 컬럼 자동 너비 (Auto-Fit) - 각 컬럼의 최대 데이터 길이 기준
+//   한글 글자는 2배 너비로 계산 (Excel 너비 단위)
+function autoFitColumns(ws, opts) {
+  if (!ws || !ws['!ref']) return ws;
+  opts = opts || {};
+  const minW = opts.min || 4;
+  const maxW = opts.max || 50;
+  const range = XLSX.utils.decode_range(ws['!ref']);
+  const widths = [];
+  for (let c = range.s.c; c <= range.e.c; c++) {
+    let maxLen = minW - 1;
+    for (let r = range.s.r; r <= range.e.r; r++) {
+      const ref = XLSX.utils.encode_cell({ r, c });
+      const cell = ws[ref];
+      if (!cell || cell.v == null) continue;
+      let str;
+      if (typeof cell.v === 'number' && !isNaN(cell.v)) {
+        str = Math.round(cell.v).toLocaleString('en-US');
+      } else {
+        str = String(cell.v);
+      }
+      // 줄바꿈 시 가장 긴 줄 기준
+      for (const line of str.split('\n')) {
+        let len = 0;
+        for (const ch of line) {
+          // 한글/한자 = 2, 영문/숫자 = 1
+          len += /[\uac00-\ud7af\u4e00-\u9faf]/.test(ch) ? 2 : 1;
+        }
+        if (len > maxLen) maxLen = len;
+      }
+    }
+    widths[c] = Math.min(Math.max(maxLen + 1, minW), maxW);
+  }
+  ws['!cols'] = ws['!cols'] || [];
+  for (let c = range.s.c; c <= range.e.c; c++) {
+    ws['!cols'][c] = Object.assign({}, ws['!cols'][c] || {}, { wch: widths[c] });
+  }
   return ws;
 }
 
@@ -4127,9 +4148,9 @@ function buildIlilSheet(slot, cg, isMonthly) {
     ]);
   });
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols'] = [{wch:18},{wch:12},{wch:14},{wch:14}];
+  autoFitColumns(ws, { min: 8, max: 25 });
   const out = borderAll(formatNumbers(ws));
-  styleHeaderRow(out, 0);  // R1 = 헤더
+  styleHeaderRow(out, 0);
   return out;
 }
 
@@ -4144,7 +4165,7 @@ function buildSeriesSheet(slot, isMonthly) {
       aoa.push([p.name, p.qty || 0, p.revenue_amount || 0, (p.revenue_amount || 0) - (p.cost_amount || 0), null, null]);
     });
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols'] = [{wch:22},{wch:12},{wch:14},{wch:14},{wch:2},{wch:22}];
+  autoFitColumns(ws, { min: 6, max: 25 });
   const out = borderAll(formatNumbers(ws));
   styleHeaderRow(out, 0);
   return out;
@@ -4184,7 +4205,7 @@ function buildSheet1(slot) {
     .sort((a, b) => (b.revenue_amount || 0) - (a.revenue_amount || 0))
     .forEach(p => aoa.push([p.name, p.qty || 0, p.revenue_amount || 0]));
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols'] = [{wch:22},{wch:12},{wch:14}];
+  autoFitColumns(ws, { min: 8, max: 25 });
   const out = borderAll(formatNumbers(ws));
   styleHeaderRow(out, 0);
   return out;
