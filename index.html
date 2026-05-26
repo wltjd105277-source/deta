@@ -976,11 +976,11 @@ function channelMap(shop, remark) {
   // 사용자 매핑 우선
   const custom = getCustomChannelMap();
   if (custom[s] && custom[s].channel) return custom[s].channel;
-  // 컴퓨존 - 비고사항(remark) '가산재고' 키워드로 세분화 (판매처 명시)
+  // 컴퓨존 - hint(비고/desc/창고 등)에서 '가산재고' 또는 '통진' 키워드로 세분화
   if (/컴퓨존|compuzone/i.test(s)) {
     const rm = String(remark || '');
-    if (/가산재고/.test(rm)) return '컴퓨존_가산재고';
-    return '컴퓨존_용산출고';  // 그 외 전부
+    if (/가산재고|통진/.test(rm)) return '컴퓨존_가산재고';
+    return '컴퓨존_용산출고';  // 그 외 전부 (용산창고 포함)
   }
   // 기존 키워드 규칙 ('쿠팡일반' 명시는 포워드벤처스보다 우선 - 분류 정확도)
   if (/쿠팡일반|쿠팡_일반/.test(s)) return '쿠팡_일반';
@@ -2071,11 +2071,9 @@ function render() {
     });
   }
 
-  // 그룹 탭(첫째 줄)에서 '컴퓨존'은 제외 (서브만 둘째 줄에 표시)
-  const groupTabsList = channels.filter(c => c !== '컴퓨존');
   tabs.innerHTML = `
     <div class="ch-tab ${currentChannel === 'all' ? 'active' : ''}" data-ch="all">전체</div>
-    ${groupTabsList.map(c => `<div class="ch-tab ${currentChannel === c ? 'active' : ''}" data-ch="${c}">${c}</div>`).join('')}
+    ${channels.map(c => `<div class="ch-tab ${currentChannel === c ? 'active' : ''}" data-ch="${c}">${c}</div>`).join('')}
     ${subChannels.length > 0 ? '<div style="width:1px;height:20px;background:var(--border);margin:0 4px;"></div>' : ''}
     ${subChannels.map(sc => `<div class="ch-tab sub ${currentChannel === sc ? 'active' : ''}" data-ch="${sc}" style="font-size:12px;padding:6px 12px;">${sc}</div>`).join('')}
     <div style="margin-left:auto;"></div>
