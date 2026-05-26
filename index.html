@@ -3957,6 +3957,34 @@ function buildReportSheet(slot, cg, date) {
   }
   // 합계 행 (R{sumRow}) 별도 병합
   _mergeRow(sumRow - 1);
+
+  // ────────────── 채널 표 매 행 셀 병합 ──────────────
+  // 컬럼 쌍 패턴:
+  //   D-E (납품가매출 + 빈), G-H (빈 + 마진율) - 전월
+  //   J-K (납품가매출 + 빈), M-N (빈 + 마진율) - 당월
+  //   P-Q (납품가매출 + 빈), S-T (빈 + 마진율) - 일일
+  const _chMergePairs = [
+    [3, 4],   // D-E
+    [6, 7],   // G-H
+    [9, 10],  // J-K
+    [12, 13], // M-N
+    [15, 16], // P-Q
+    [18, 19], // S-T
+  ];
+  // 채널 표 헤더2 (라벨 행) + 데이터 행들 + 종합 행
+  for (let r = chHeader2Row - 1; r <= chTotalRow - 1; r++) {
+    _chMergePairs.forEach(([c1, c2]) => {
+      ws['!merges'].push({ s:{r, c:c1}, e:{r, c:c2} });
+    });
+    // 우측 정렬 (납품가매출, 마진율 셀)
+    ['D','G','J','M','P','S'].forEach(letter => {
+      const ref = `${letter}${r+1}`;
+      if (ws[ref]) {
+        ws[ref].s = ws[ref].s || {};
+        ws[ref].s.alignment = Object.assign({}, ws[ref].s.alignment || {}, _alignRight);
+      }
+    });
+  }
   return ws;
 }
 
