@@ -3613,9 +3613,12 @@ function buildReportSheet(slot, cg, date) {
   const aoa = [];
   const blank = (cols) => Array(cols).fill(null);
   // 상품 합계 행 위치(1-indexed Excel row): lastProdRow = 4 + sortedProds.length
-  // 채널 표(종합 행) = lastProdRow + 27 (원본 보고서 양식 R286 매칭)
+  // 채널 표(종합 행) = lastProdRow + 3 + 채널수 (동적)
   const _lastProdRow_pre = 4 + sortedProds.length;
-  const _chTotalRow_pre = _lastProdRow_pre + 27;
+  const _chCount_pre = (typeof GROUP_CHANNELS !== 'undefined' && GROUP_CHANNELS[cg])
+    ? Math.max(GROUP_CHANNELS[cg].length, 1)
+    : Math.max(((slot.detail?.monthly_channels || []).length), 1);
+  const _chTotalRow_pre = _lastProdRow_pre + 4 + _chCount_pre;  // sumRow + 4(헤더 등) + 채널수
   const totalRows = Math.max(32, _chTotalRow_pre + 1);
   for (let i = 0; i < totalRows; i++) aoa.push(blank(24));
 
@@ -3723,12 +3726,13 @@ function buildReportSheet(slot, cg, date) {
   const chHeader1Row = sumRow + 2;       // 섹션 헤더 (전월 누적/당월 누적/일일결산)
   const chHeader2Row = sumRow + 3;       // 컬럼 헤더 (입점몰/수량/납품가/마진/마진율)
   const chDataStartRow = sumRow + 4;     // 데이터 시작
-  const CH_ROW_COUNT = 23;               // 원본 양식과 동일 (padding 포함)
-  const chTotalRow = chDataStartRow + CH_ROW_COUNT;  // 종합 행
   // 채널 순서: GROUP_CHANNELS[cg] (없으면 슬롯의 monthly_channels 순서)
   const _chOrder = (typeof GROUP_CHANNELS !== 'undefined' && GROUP_CHANNELS[cg])
     ? [...GROUP_CHANNELS[cg]]
     : ((slot.detail?.monthly_channels || []).map(c => c.channel));
+  // 채널 표 행 수 = 실제 채널 수 (빈 행 없음)
+  const CH_ROW_COUNT = Math.max(_chOrder.length, 1);
+  const chTotalRow = chDataStartRow + CH_ROW_COUNT;  // 종합 행
   // lookup 맵
   const _prevChMap = (prevAgg && prevAgg.channels) || {};
   const _monthlyChMap = {};
