@@ -271,6 +271,7 @@
   }
   .badge-ch.coupang { background: #ffe5e5; color: #d63333; }
   .badge-ch.shopn { background: #d4f3df; color: #03802f; }
+  .badge-ch.compuzon { background: #fef3c7; color: #b45309; }
   .badge-ch.other { background: #e8eaf6; color: #4f46e5; }
 
   .toast {
@@ -2238,8 +2239,12 @@ function render() {
 
   // 월 목표 설정 패널 (판매현황 기반 데이터에 한해, 사이트별 필터 시는 숨김)
   const monthKey = currentDate.slice(0, 7);
-  // augmented dayData 기준 - 이번 달 어딘가 업로드된 그룹 포함 (0원 stub 제외)
-  const goalGroups = viewChannels.filter(cg => dayData[cg]?._source === '판매현황' && !dayData[cg]?._empty_stub);
+  // 정의된 모든 그룹(쿠팡/샵N/컴퓨존)은 데이터 없어도 목표 입력칸 표시
+  // viewChannels에서 정의된 그룹 + 실제 업로드된 그룹 둘 다 포함
+  const goalGroups = viewChannels.filter(cg => {
+    if (GROUP_CHANNELS[cg]) return true;  // 쿠팡/샵N/컴퓨존
+    return dayData[cg]?._source === '판매현황' && !dayData[cg]?._empty_stub;
+  });
   let html = '';
   if (goalGroups.length > 0 && !filterCh) {
     html += `<div class="panel" style="margin-bottom:12px;display:flex;flex-wrap:wrap;gap:14px;align-items:center;padding:14px 18px;">
@@ -2248,7 +2253,7 @@ function render() {
         const k = `goal_${cg}_${monthKey}`;
         const v = localStorage.getItem(k) || '';
         return `<div style="display:flex;align-items:center;gap:6px;">
-          <span class="badge-ch ${cg==='쿠팡'?'coupang':'shopn'}">${cg}</span>
+          <span class="badge-ch ${cg==='쿠팡'?'coupang':(cg==='컴퓨존'?'compuzon':cg==='샵N'?'shopn':'other')}">${cg}</span>
           <input type="number" data-goal-key="${k}" value="${v}" placeholder="원 단위로 입력"
             style="width:160px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-variant-numeric:tabular-nums;">
         </div>`;
@@ -2263,15 +2268,17 @@ function render() {
     for (const cg of goalGroups) {
       const slot = dayData[cg];
       if (!slot) continue;
-      // 월간 누적 채널 우선
+      // 월간 누적 채널 우선 (매출 있는 sub만)
       (slot.detail?.monthly_channels || []).forEach(c => {
         if (c.amount !== 0 || c.qty !== 0) adChannels.add(c.channel);
       });
-      // 혹시 monthly_channels가 비어있으면 일일 채널 폴백
-      if (adChannels.size === 0) {
-        (slot._channels_today || []).forEach(c => {
-          if (c.amount !== 0 || c.qty !== 0) adChannels.add(c.channel);
-        });
+      // 일일 채널 폴백
+      (slot._channels_today || []).forEach(c => {
+        if (c.amount !== 0 || c.qty !== 0) adChannels.add(c.channel);
+      });
+      // 정의된 그룹이면 매출 없어도 sub 채널 모두 노출 (광고는 0원 날에도 나감)
+      if (GROUP_CHANNELS[cg]) {
+        GROUP_CHANNELS[cg].forEach(ch => adChannels.add(ch));
       }
     }
     const adChannelList = Array.from(adChannels);
@@ -2284,7 +2291,9 @@ function render() {
           ${adChannelList.map(ch => {
             const k = `adspend_${ch}_${monthKey}`;
             const v = localStorage.getItem(k) || '';
-            const cls = ch.includes('쿠팡') ? 'coupang' : (ch === '스마트스토어' || ch === '오늘의집' ? 'shopn' : 'other');
+            const cls = ch.includes('쿠팡') || ch === '나비엠알오' || ch === '십일번가' || ch === '지마켓' || ch === '토스' ? 'coupang'
+              : (ch === '스마트스토어' || ch === '오늘의집') ? 'shopn'
+              : ch.includes('컴퓨존') ? 'compuzon' : 'other';
             return `<div style="display:flex;align-items:center;gap:6px;margin-top:10px;">
               <span class="badge-ch ${cls}" style="white-space:nowrap;">${ch}</span>
               <input type="number" data-adspend-key="${k}" value="${v}" placeholder="0"
