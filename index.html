@@ -130,9 +130,7 @@
   }
   .date-item.active .badge { background: rgba(255,255,255,0.25); color: white; }
   .date-item .badge.has { background: var(--success-light); color: var(--success); }
-  .date-item .badge.has.compuzon-badge { background: #fef3c7; color: #b45309; }
   .date-item.active .badge.has { background: rgba(255,255,255,0.3); color: white; }
-  .date-item.active .badge.has.compuzon-badge { background: rgba(255,255,255,0.3); color: white; }
 
   .sidebar-actions { margin-top: auto; display: flex; flex-direction: column; gap: 8px; }
   .btn {
@@ -1974,7 +1972,7 @@ function renderDateList() {
               <span class="badges">
                 <span class="badge ${hasC ? 'has' : ''}">쿠</span>
                 <span class="badge ${hasS ? 'has' : ''}">샵</span>
-                <span class="badge ${hasK ? 'has' : ''} compuzon-badge">컴</span>
+                <span class="badge ${hasK ? 'has' : ''}">컴</span>
               </span>
             </div>`;
         }
