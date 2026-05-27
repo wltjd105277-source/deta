@@ -157,19 +157,7 @@
   }
   .header h1 { font-size: 26px; font-weight: 700; }
   .header .subtitle { color: var(--text-sub); font-size: 13px; margin-top: 4px; }
-  .channel-tabs { display: flex; flex-direction: column; gap: 6px; }
-  .channel-tabs .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-  .channel-tabs .row.sub-row {
-    padding: 6px 10px;
-    background: var(--bg);
-    border-radius: 8px;
-  }
-  .channel-tabs .row.sub-row .sub-label {
-    font-size: 11px;
-    color: var(--text-sub);
-    font-weight: 600;
-    margin-right: 4px;
-  }
+  .channel-tabs { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
   .ch-tab {
     padding: 8px 16px;
     border-radius: 8px;
@@ -180,12 +168,70 @@
     font-weight: 500;
     transition: all 0.15s;
   }
-  .ch-tab.sub { padding: 5px 11px; font-size: 12px; }
   .ch-tab:hover { background: var(--bg); }
   .ch-tab.active {
     background: var(--primary); color: white; border-color: var(--primary);
   }
-  .ch-tab.sub.active { background: var(--primary); color: white; border-color: var(--primary); }
+  /* 사이트별 드롭다운 */
+  .sub-dropdown { position: relative; display: inline-block; }
+  .sub-dropdown-btn {
+    padding: 8px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--card);
+    font-size: 13px;
+    cursor: pointer;
+    font-weight: 500;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.15s;
+  }
+  .sub-dropdown-btn:hover { background: var(--bg); }
+  .sub-dropdown-btn.active {
+    background: var(--primary); color: white; border-color: var(--primary);
+  }
+  .sub-dropdown-btn .chevron { font-size: 9px; opacity: 0.7; }
+  .sub-dropdown-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.10);
+    padding: 8px;
+    min-width: 220px;
+    max-height: 360px;
+    overflow-y: auto;
+    z-index: 50;
+    display: none;
+  }
+  .sub-dropdown.open .sub-dropdown-menu { display: block; }
+  .sub-dropdown-menu .group-label {
+    font-size: 10px;
+    color: var(--text-sub);
+    font-weight: 700;
+    padding: 6px 10px 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .sub-dropdown-menu .sub-item {
+    padding: 7px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .sub-dropdown-menu .sub-item:hover { background: var(--bg); }
+  .sub-dropdown-menu .sub-item.active {
+    background: var(--primary); color: white; font-weight: 600;
+  }
+  .sub-dropdown-menu .sub-item .check {
+    font-size: 11px; opacity: 0.7;
+  }
 
   .empty-state {
     text-align: center;
@@ -2187,19 +2233,49 @@ function render() {
     ..._groupOrder.filter(g => channels.includes(g)),
     ...channels.filter(c => !_groupOrder.includes(c)),
   ];
+  // 드롭다운: subChannels를 그룹별로 묶기
+  const _subsByGroup = {};
+  for (const sc of subChannels) {
+    const grp = subToGroup[sc] || '기타';
+    if (!_subsByGroup[grp]) _subsByGroup[grp] = [];
+    _subsByGroup[grp].push(sc);
+  }
+  // 드롭다운 버튼 라벨: 현재 sub 선택 중이면 그 이름, 아니면 "사이트별"
+  const _isSubActive = subChannels.includes(currentChannel);
+  const _dropdownLabel = _isSubActive ? currentChannel : '사이트별';
   tabs.innerHTML = `
-    <div class="row">
-      <div class="ch-tab ${currentChannel === 'all' ? 'active' : ''}" data-ch="all">전체</div>
-      ${_orderedGroups.map(c => `<div class="ch-tab ${currentChannel === c ? 'active' : ''}" data-ch="${c}">${c}</div>`).join('')}
-      <div style="margin-left:auto;"></div>
-      <button id="btnCompareChannels" style="padding:6px 14px;background:#fbbf24;color:#fff;border:none;border-radius:8px;font-size:12px;cursor:pointer;font-weight:600;white-space:nowrap;">🆚 채널 비교</button>
-    </div>
+    <div class="ch-tab ${currentChannel === 'all' ? 'active' : ''}" data-ch="all">전체</div>
+    ${_orderedGroups.map(c => `<div class="ch-tab ${currentChannel === c ? 'active' : ''}" data-ch="${c}">${c}</div>`).join('')}
     ${subChannels.length > 0 ? `
-      <div class="row sub-row">
-        <span class="sub-label">사이트별</span>
-        ${subChannels.map(sc => `<div class="ch-tab sub ${currentChannel === sc ? 'active' : ''}" data-ch="${sc}">${sc}</div>`).join('')}
+      <div class="sub-dropdown" id="subDropdown">
+        <button class="sub-dropdown-btn ${_isSubActive ? 'active' : ''}" id="subDropdownBtn" type="button">
+          <span>${_dropdownLabel}</span>
+          <span class="chevron">▼</span>
+        </button>
+        <div class="sub-dropdown-menu">
+          ${_orderedGroups.filter(g => _subsByGroup[g]).map(g => `
+            <div class="group-label">${g}</div>
+            ${_subsByGroup[g].map(sc => `
+              <div class="sub-item ${currentChannel === sc ? 'active' : ''}" data-ch="${sc}">
+                <span>${sc}</span>
+                ${currentChannel === sc ? '<span class="check">✓</span>' : ''}
+              </div>
+            `).join('')}
+          `).join('')}
+          ${_subsByGroup['기타'] ? `
+            <div class="group-label">기타</div>
+            ${_subsByGroup['기타'].map(sc => `
+              <div class="sub-item ${currentChannel === sc ? 'active' : ''}" data-ch="${sc}">
+                <span>${sc}</span>
+                ${currentChannel === sc ? '<span class="check">✓</span>' : ''}
+              </div>
+            `).join('')}
+          ` : ''}
+        </div>
       </div>
     ` : ''}
+    <div style="margin-left:auto;"></div>
+    <button id="btnCompareChannels" style="padding:6px 14px;background:#fbbf24;color:#fff;border:none;border-radius:8px;font-size:12px;cursor:pointer;font-weight:600;white-space:nowrap;">🆚 채널 비교</button>
   `;
   tabs.querySelectorAll('.ch-tab').forEach(el => {
     el.addEventListener('click', () => {
@@ -2207,6 +2283,25 @@ function render() {
       render();
     });
   });
+  // 사이트별 드롭다운
+  const subDD = document.getElementById('subDropdown');
+  const subDDBtn = document.getElementById('subDropdownBtn');
+  if (subDD && subDDBtn) {
+    subDDBtn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      subDD.classList.toggle('open');
+    });
+    document.addEventListener('click', (ev) => {
+      if (!subDD.contains(ev.target)) subDD.classList.remove('open');
+    });
+    subDD.querySelectorAll('.sub-item').forEach(el => {
+      el.addEventListener('click', () => {
+        currentChannel = el.dataset.ch;
+        subDD.classList.remove('open');
+        render();
+      });
+    });
+  }
   // 비교 버튼 핸들러
   const cmpBtn = document.getElementById('btnCompareChannels');
   if (cmpBtn) {
