@@ -130,7 +130,9 @@
   }
   .date-item.active .badge { background: rgba(255,255,255,0.25); color: white; }
   .date-item .badge.has { background: var(--success-light); color: var(--success); }
+  .date-item .badge.has.compuzon-badge { background: #fef3c7; color: #b45309; }
   .date-item.active .badge.has { background: rgba(255,255,255,0.3); color: white; }
+  .date-item.active .badge.has.compuzon-badge { background: rgba(255,255,255,0.3); color: white; }
 
   .sidebar-actions { margin-top: auto; display: flex; flex-direction: column; gap: 8px; }
   .btn {
@@ -1965,12 +1967,14 @@ function renderDateList() {
           const channels = Object.keys(store[d]);
           const hasC = channels.includes('쿠팡');
           const hasS = channels.includes('샵N');
+          const hasK = channels.includes('컴퓨존');
           html += `
             <div class="date-item in-tree ${currentDate === d ? 'active' : ''}" data-date="${d}">
               <span>${formatDateDisplay(d)}</span>
               <span class="badges">
                 <span class="badge ${hasC ? 'has' : ''}">쿠</span>
                 <span class="badge ${hasS ? 'has' : ''}">샵</span>
+                <span class="badge ${hasK ? 'has' : ''} compuzon-badge">컴</span>
               </span>
             </div>`;
         }
