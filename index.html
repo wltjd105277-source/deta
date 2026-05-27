@@ -157,7 +157,19 @@
   }
   .header h1 { font-size: 26px; font-weight: 700; }
   .header .subtitle { color: var(--text-sub); font-size: 13px; margin-top: 4px; }
-  .channel-tabs { display: flex; gap: 6px; }
+  .channel-tabs { display: flex; flex-direction: column; gap: 6px; }
+  .channel-tabs .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .channel-tabs .row.sub-row {
+    padding: 6px 10px;
+    background: var(--bg);
+    border-radius: 8px;
+  }
+  .channel-tabs .row.sub-row .sub-label {
+    font-size: 11px;
+    color: var(--text-sub);
+    font-weight: 600;
+    margin-right: 4px;
+  }
   .ch-tab {
     padding: 8px 16px;
     border-radius: 8px;
@@ -168,10 +180,12 @@
     font-weight: 500;
     transition: all 0.15s;
   }
+  .ch-tab.sub { padding: 5px 11px; font-size: 12px; }
   .ch-tab:hover { background: var(--bg); }
   .ch-tab.active {
     background: var(--primary); color: white; border-color: var(--primary);
   }
+  .ch-tab.sub.active { background: var(--primary); color: white; border-color: var(--primary); }
 
   .empty-state {
     text-align: center;
@@ -2167,13 +2181,25 @@ function render() {
     });
   }
 
+  // 그룹 탭 표시 순서: GROUP_CHANNELS 정의 순서대로 (쿠팡, 샵N, 컴퓨존) + 기타
+  const _groupOrder = Object.keys(GROUP_CHANNELS);
+  const _orderedGroups = [
+    ..._groupOrder.filter(g => channels.includes(g)),
+    ...channels.filter(c => !_groupOrder.includes(c)),
+  ];
   tabs.innerHTML = `
-    <div class="ch-tab ${currentChannel === 'all' ? 'active' : ''}" data-ch="all">전체</div>
-    ${channels.map(c => `<div class="ch-tab ${currentChannel === c ? 'active' : ''}" data-ch="${c}">${c}</div>`).join('')}
-    ${subChannels.length > 0 ? '<div style="width:1px;height:20px;background:var(--border);margin:0 4px;"></div>' : ''}
-    ${subChannels.map(sc => `<div class="ch-tab sub ${currentChannel === sc ? 'active' : ''}" data-ch="${sc}" style="font-size:12px;padding:6px 12px;">${sc}</div>`).join('')}
-    <div style="margin-left:auto;"></div>
-    <button id="btnCompareChannels" style="padding:6px 14px;background:#fbbf24;color:#fff;border:none;border-radius:8px;font-size:12px;cursor:pointer;font-weight:600;white-space:nowrap;">🆚 채널 비교</button>
+    <div class="row">
+      <div class="ch-tab ${currentChannel === 'all' ? 'active' : ''}" data-ch="all">전체</div>
+      ${_orderedGroups.map(c => `<div class="ch-tab ${currentChannel === c ? 'active' : ''}" data-ch="${c}">${c}</div>`).join('')}
+      <div style="margin-left:auto;"></div>
+      <button id="btnCompareChannels" style="padding:6px 14px;background:#fbbf24;color:#fff;border:none;border-radius:8px;font-size:12px;cursor:pointer;font-weight:600;white-space:nowrap;">🆚 채널 비교</button>
+    </div>
+    ${subChannels.length > 0 ? `
+      <div class="row sub-row">
+        <span class="sub-label">사이트별</span>
+        ${subChannels.map(sc => `<div class="ch-tab sub ${currentChannel === sc ? 'active' : ''}" data-ch="${sc}">${sc}</div>`).join('')}
+      </div>
+    ` : ''}
   `;
   tabs.querySelectorAll('.ch-tab').forEach(el => {
     el.addEventListener('click', () => {
