@@ -1053,6 +1053,8 @@ function channelMap(shop, remark) {
   if (/토스/.test(s)) return '토스';
   if (/샵N|엔에이치엔/.test(s)) return '스마트스토어';
   if (/오늘의집|버킷플레이스/.test(s)) return '오늘의집';
+  // 원룸꾸미기/원룸만들기/원룸 → '원룸만들기'로 통일
+  if (/원룸/.test(s)) return '원룸만들기';
   // 폴백 정리만
   return s.replace(/^오픈마켓\(/, '').replace(/\)$/, '').replace(/라인$/, '');
 }
@@ -1061,7 +1063,7 @@ function channelMap(shop, remark) {
 function isKnownChannel(shop) {
   if (!shop) return true;
   const s = String(shop);
-  return /쿠팡로켓|포워드벤처스|쿠팡|나비엠알오|지마켓|11번가|십일번가|토스|샵N|엔에이치엔|오늘의집|버킷플레이스|컴퓨존|compuzone/i.test(s);
+  return /쿠팡로켓|포워드벤처스|쿠팡|나비엠알오|지마켓|11번가|십일번가|토스|샵N|엔에이치엔|오늘의집|버킷플레이스|컴퓨존|compuzone|원룸/i.test(s);
 }
 
 // 채널그룹별 표시할 채널 목록 (데이터 없는 채널도 0으로 표시)
@@ -4901,6 +4903,58 @@ if (searchInput) {
 // ================================================================
 // 시작
 // ================================================================
+// ─── 원룸꾸미기 → 원룸만들기 마이그레이션 (1회성) ───
+(function migrateWonroom() {
+  const FLAG = 'migrated_wonroom_v1';
+  if (localStorage.getItem(FLAG)) return;
+  let touched = false;
+  // a) custom_channel_map
+  try {
+    const raw = localStorage.getItem('custom_channel_map');
+    if (raw) {
+      const m = JSON.parse(raw);
+      let changed = false;
+      for (const k of Object.keys(m)) {
+        if (m[k]?.channel === '원룸꾸미기') {
+          m[k].channel = '원룸만들기';
+          changed = true;
+        }
+      }
+      if (changed) {
+        localStorage.setItem('custom_channel_map', JSON.stringify(m));
+        touched = true;
+      }
+    }
+  } catch (e) {}
+  // b) store 안의 채널명 (트랜잭션은 raw shop 그대로 — recomputeAggregates가 새 channelMap으로 재집계함)
+  //    여기서는 store 자체의 monthly_channels/daily_channels 등의 채널명만 임시로 치환
+  for (const d of Object.keys(store)) {
+    for (const cg of Object.keys(store[d] || {})) {
+      const slot = store[d][cg];
+      if (!slot) continue;
+      // daily_channels / monthly_channels
+      ['daily_channels', 'monthly_channels'].forEach(key => {
+        const arr = slot.detail?.[key];
+        if (Array.isArray(arr)) {
+          arr.forEach(c => { if (c.channel === '원룸꾸미기') { c.channel = '원룸만들기'; touched = true; } });
+        }
+      });
+      // _channels_today
+      if (Array.isArray(slot._channels_today)) {
+        slot._channels_today.forEach(c => { if (c.channel === '원룸꾸미기') { c.channel = '원룸만들기'; touched = true; } });
+      }
+    }
+  }
+  if (touched) {
+    saveStore();
+    console.log('[migration] 원룸꾸미기 → 원룸만들기 적용됨');
+  }
+  localStorage.setItem(FLAG, '1');
+  // 채널 새로 매핑하기 위해 트랜잭션부터 슬롯 재구축
+  if (typeof rebuildAllSlotsFromTransactions === 'function') {
+    rebuildAllSlotsFromTransactions();
+  }
+})();
 recomputeAggregates();
 const dates = Object.keys(store).sort();
 if (dates.length > 0) currentDate = dates[dates.length - 1];
