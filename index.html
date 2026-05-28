@@ -1071,6 +1071,11 @@ const GROUP_CHANNELS = {
   '컴퓨존': ['컴퓨존_가산재고', '컴퓨존_일반출고'],
 };
 
+// '전체' view에서 합산에 포함하지 않을 그룹 (별도 관리 그룹)
+// 컴퓨존은 회계상 따로 관리하므로 전체 KPI/차트/상품표에서 제외.
+// '컴퓨존' 탭을 클릭하면 컴퓨존만 표시됨.
+const EXCLUDED_FROM_ALL_VIEW = ['컴퓨존'];
+
 // ─────────────── 배송비 그룹 (DEL-매출배XXX 품목코드 매핑) ───────────────
 // 사용자 제공 매핑표 기반:
 //   item_code → { group, models, rate(경동택배 단가) }
@@ -2192,8 +2197,11 @@ function render() {
 
   // 그룹 탭 (전체 / 쿠팡 / 샵N / 컴퓨존) + 사이트별 탭 (스마트스토어, 지마켓 등)
   // 서브채널 수집: 일일/월간 모두 + GROUP_CHANNELS 정의분
+  // 전체 view에서는 EXCLUDED 그룹의 sub는 드롭다운에서 숨김
   const subChannelsSet = new Set();
+  const _includeGroupSubs = (cg) => currentChannel !== 'all' || !EXCLUDED_FROM_ALL_VIEW.includes(cg);
   for (const cg of channels) {
+    if (!_includeGroupSubs(cg)) continue;
     const slot = dayData[cg];
     if (!slot) continue;
     // 일일 채널 (실제 데이터)
@@ -2315,7 +2323,8 @@ function render() {
   // 채널 보기 결정
   const isSubChannel = currentChannel !== 'all' && !channels.includes(currentChannel);
   const subChannelGroup = isSubChannel ? subToGroup[currentChannel] : null;
-  const viewChannels = currentChannel === 'all' ? channels
+  const viewChannels = currentChannel === 'all'
+                       ? channels.filter(c => !EXCLUDED_FROM_ALL_VIEW.includes(c))
                      : isSubChannel ? [subChannelGroup]
                      : [currentChannel];
   if (isSubChannel && !subChannelGroup) {
@@ -3158,7 +3167,8 @@ function showMissingCalendar() {
   for (const cg of channels) {
     (GROUP_CHANNELS[cg] || []).forEach(ch => subToGroup[ch] = cg);
   }
-  const viewChannels = currentChannel === 'all' ? channels
+  const viewChannels = currentChannel === 'all'
+                       ? channels.filter(c => !EXCLUDED_FROM_ALL_VIEW.includes(c))
                      : isSubChannel ? [subToGroup[currentChannel]]
                      : [currentChannel];
 
