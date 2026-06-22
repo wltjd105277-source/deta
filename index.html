@@ -5161,34 +5161,80 @@ if (searchInput) {
     rebuildAllSlotsFromTransactions();
   }
 })();
-// ─── 트랜잭션 t.model 정규화 마이그레이션 (긴 설명형 → [LS-XXX]) ───
-(function migrateModelName() {
-  const FLAG = 'migrated_model_v1';
+// ─── 컬럼 시프트 복구 마이그레이션 v2 ───
+// 새 ERP가 [3]에 거래처코드를 추가하면서 옛 인덱스로 잘못 파싱된 트랜잭션 복구.
+// 한 칸씩 시프트해서 amount/cost_unit/model 등 원위치.
+(function migrateColumnShift() {
+  const FLAG = 'migrated_column_shift_v2';
   if (localStorage.getItem(FLAG)) return;
-  let touched = 0;
+  let recovered = 0, modelOnly = 0;
+  const isWrong = (t) => {
+    // qty가 string이거나 warehouse가 number면 잘못 파싱됨
+    if (typeof t.qty === 'string' && t.qty !== '') return true;
+    if (typeof t.warehouse === 'number') return true;
+    // model이 짧은 코드인데 desc가 numeric string(거래처코드 같음)이면 잘못 파싱
+    if (typeof t.desc === 'string' && /^\d{6,}$/.test(t.desc)) return true;
+    return false;
+  };
   for (const d of Object.keys(store)) {
     for (const cg of Object.keys(store[d] || {})) {
       const slot = store[d][cg];
       if (!slot || !Array.isArray(slot._transactions)) continue;
       slot._transactions.forEach(t => {
-        const orig = String(t.model || '').trim();
-        if (!orig) return;
-        const m = orig.match(/\[([A-Z][A-Za-z0-9\-_]+)\]\s*$/);
-        if (m && m[1] !== orig) {
-          t.model = m[1];
-          touched++;
+        if (!isWrong(t)) {
+          // 잘못 파싱은 아닌데 model이 긴 설명형이면 [LS-XXX] 추출만
+          const orig = String(t.model || '').trim();
+          const m = orig.match(/\[([A-Z][A-Za-z0-9\-_]+)\]\s*$/);
+          if (m && m[1] !== orig) { t.model = m[1]; modelOnly++; }
+          return;
         }
+        // 컬럼 시프트 복구
+        const oldModel = t.model;        // r[4] = 품명
+        const oldQty = t.qty;            // r[5] = 모델명 (string)
+        const oldAmount = t.amount;      // r[7] = 단가
+        const oldVat = t.vat;            // r[8] = 공급가액 (실제 매출액)
+        const oldTotal = t.total;        // r[9] = 부가세
+        const oldCost = t.cost_unit;     // r[10] = 합계
+        const oldWh = t.warehouse;       // r[11] = 입고단가
+        const oldGroupName = t.group_name;  // r[13] = 회계반영일자
+        const oldRemark = t.remark;      // r[14] = 품목그룹1명
+
+        // 모델명 추출 (oldQty가 string으로 들어간 모델명)
+        let model = String(oldQty || '').trim();
+        const m = model.match(/\[([A-Z][A-Za-z0-9\-_]+)\]\s*$/);
+        if (m) model = m[1];
+
+        // qty = 공급가액 / 단가 (정수 추정)
+        let qty = 0;
+        if (oldAmount && Number(oldAmount) > 0) {
+          qty = Math.round(Number(oldVat || 0) / Number(oldAmount));
+        }
+
+        t.desc = String(oldModel || '');   // 품명
+        t.model = model;                    // 모델명
+        t.qty = qty;                        // 수량 (추정)
+        t.unit_price = Number(oldAmount) || 0;  // 단가 (참고용)
+        t.amount = Number(oldVat) || 0;     // 공급가액 (납품가) ✅
+        t.vat = Number(oldTotal) || 0;      // 부가세
+        t.total = Number(oldCost) || 0;     // 합계
+        t.cost_unit = Number(oldWh) || 0;   // 입고단가 ✅
+        t.warehouse = String(oldGroupName || '');  // 창고 (was 회계반영일자, 보통 empty)
+        t.group_name = String(oldRemark || '');    // 품목그룹1명
+        t.remark = '';  // 비고사항은 손실됨 (재업로드해야 가산재고 분류 복구)
+        recovered++;
       });
     }
   }
-  if (touched > 0) {
+  if (recovered > 0 || modelOnly > 0) {
     saveStore();
-    console.log(`[migration] 트랜잭션 모델명 ${touched}건 정규화`);
+    console.log(`[migration v2] 컬럼 시프트 복구 ${recovered}건 + 모델명 추출만 ${modelOnly}건`);
     if (typeof rebuildAllSlotsFromTransactions === 'function') {
       rebuildAllSlotsFromTransactions();
     }
   }
   localStorage.setItem(FLAG, '1');
+  // 이전 v1 플래그도 함께 set (중복 실행 방지)
+  localStorage.setItem('migrated_model_v1', '1');
 })();
 recomputeAggregates();
 const dates = Object.keys(store).sort();
