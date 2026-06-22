@@ -486,6 +486,7 @@
       <input type="file" id="importInput" accept=".json" style="display:none">
       <button class="btn" id="btnRebuild" style="background:#fbbf24;color:#fff;">🔄 채널 재분류 (룰 변경 적용)</button>
       <button class="btn" id="btnDiagComputez" style="background:#0ea5e9;color:#fff;">🔍 컴퓨존 진단</button>
+      <button class="btn" id="btnDiagRevenue" style="background:#a855f7;color:#fff;">📊 매출 검증 (ERP 피벗 비교)</button>
       <button class="btn danger" id="btnClear">🗑 모든 데이터 삭제</button>
     </div>
   </aside>
@@ -4887,6 +4888,167 @@ document.getElementById('importInput').addEventListener('change', async e => {
     showToast('파일을 읽을 수 없습니다', 'error');
   }
 });
+
+document.getElementById('btnDiagRevenue').addEventListener('click', () => {
+  if (!currentDate) { showToast('일자를 먼저 선택하세요', 'error'); return; }
+  showRevenueDiagModal(currentDate);
+});
+
+function showRevenueDiagModal(date) {
+  const month = date.slice(0, 7);
+  // 이번 달 모든 트랜잭션 수집 (≤ date)
+  const allTxns = [];
+  for (const d of Object.keys(store).sort()) {
+    if (!d.startsWith(month) || d > date) continue;
+    for (const cg of Object.keys(store[d] || {})) {
+      const slot = store[d][cg];
+      if (!slot || slot._source !== '판매현황' || !Array.isArray(slot._transactions)) continue;
+      slot._transactions.forEach(t => allTxns.push({ ...t, _date: d, _group: cg }));
+    }
+  }
+  // 분류 함수
+  const categorize = (t) => {
+    const code = String(t.item_code || '');
+    const grp = String(t.group_name || '');
+    if (code.startsWith('DEL-')) return '배송비';
+    if (/판매장려금/.test(grp)) return '판매장려금';
+    if ((t.qty || 0) < 0) return '반품';
+    return '주문';
+  };
+  // 채널 × 구분 집계
+  const agg = {};  // {channel: {category: {count, qty, cost, amount, profit}}}
+  for (const t of allTxns) {
+    const ch = channelMap(t.shop, t.remark);
+    const cat = categorize(t);
+    if (!agg[ch]) agg[ch] = {};
+    if (!agg[ch][cat]) agg[ch][cat] = { count:0, qty:0, cost:0, amount:0, profit:0 };
+    const cell = agg[ch][cat];
+    cell.count++;
+    cell.qty += (t.qty || 0);
+    const cost = (t.cost_unit || 0) * (t.qty || 0);
+    cell.cost += cost;
+    cell.amount += (t.amount || 0);
+    cell.profit += ((t.amount || 0) - cost);
+  }
+  // 합계
+  let totalCount=0, totalCost=0, totalAmount=0, totalProfit=0;
+  for (const ch of Object.keys(agg)) {
+    for (const cat of Object.keys(agg[ch])) {
+      const c = agg[ch][cat];
+      totalCount += c.count;
+      totalCost += c.cost;
+      totalAmount += c.amount;
+      totalProfit += c.profit;
+    }
+  }
+  // 채널 정렬: 매출 순
+  const channelOrder = Object.keys(agg).sort((a,b) => {
+    const sa = Object.values(agg[a]).reduce((s,c)=>s+c.amount,0);
+    const sb = Object.values(agg[b]).reduce((s,c)=>s+c.amount,0);
+    return sb - sa;
+  });
+  const cats = ['주문', '반품', '배송비', '판매장려금'];
+  const fmt = n => Math.round(n).toLocaleString('ko-KR');
+
+  // CSV 생성
+  const csvLines = ['일자,그룹,쇼핑몰,채널,구분,item_code,model,desc,수량,매입단가,매입가합계,납품가,마진,remark'];
+  for (const t of allTxns) {
+    const ch = channelMap(t.shop, t.remark);
+    const cat = categorize(t);
+    const cost = (t.cost_unit || 0) * (t.qty || 0);
+    const margin = (t.amount || 0) - cost;
+    const esc = s => `"${String(s||'').replace(/"/g,'""')}"`;
+    csvLines.push([t._date, t._group, esc(t.shop), ch, cat, esc(t.item_code), esc(t.model),
+      esc(t.desc), t.qty||0, t.cost_unit||0, cost, t.amount||0, margin, esc(t.remark)].join(','));
+  }
+  const csvBlob = new Blob(['\uFEFF' + csvLines.join('\n')], {type:'text/csv;charset=utf-8;'});
+  const csvUrl = URL.createObjectURL(csvBlob);
+
+  const modal = document.createElement('div');
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1001;display:flex;align-items:center;justify-content:center;padding:20px;';
+  modal.innerHTML = `
+    <div style="background:white;border-radius:12px;max-width:1200px;width:100%;max-height:90vh;overflow:auto;box-shadow:0 10px 30px rgba(0,0,0,0.2);">
+      <div style="padding:18px 22px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;">
+        <div>
+          <div style="font-size:16px;font-weight:700;">📊 매출 검증 (ERP 피벗 비교) — ${month}</div>
+          <div style="font-size:12px;color:var(--text-sub);margin-top:4px;">${date.slice(8,10)}일까지 누적 / 총 ${allTxns.length.toLocaleString('ko-KR')}건 트랜잭션</div>
+        </div>
+        <button class="modal-close-btn" style="background:transparent;border:none;font-size:20px;cursor:pointer;color:var(--text-sub);width:32px;height:32px;border-radius:6px;">×</button>
+      </div>
+      <div style="padding:18px 22px;">
+        <div style="margin-bottom:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+          <a href="${csvUrl}" download="lanstar_revenue_${month}_${date}.csv" style="padding:8px 14px;background:var(--primary);color:white;text-decoration:none;border-radius:6px;font-size:13px;font-weight:600;">📥 전체 트랜잭션 CSV 다운로드</a>
+          <span style="font-size:11px;color:var(--text-sub);">ERP 피벗과 한 줄씩 비교 가능</span>
+        </div>
+        <h4 style="margin:0 0 10px;font-size:14px;">📋 채널 × 구분 집계 (ERP 피벗 형식)</h4>
+        <div style="overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;font-size:12px;">
+            <thead>
+              <tr style="background:#dcfce7;">
+                <th style="padding:6px 8px;border:1px solid var(--border);text-align:left;">쇼핑몰</th>
+                <th style="padding:6px 8px;border:1px solid var(--border);text-align:left;">구분</th>
+                <th style="padding:6px 8px;border:1px solid var(--border);text-align:right;">수량.</th>
+                <th style="padding:6px 8px;border:1px solid var(--border);text-align:right;">매입가</th>
+                <th style="padding:6px 8px;border:1px solid var(--border);text-align:right;">납품가</th>
+                <th style="padding:6px 8px;border:1px solid var(--border);text-align:right;">마진</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${channelOrder.flatMap(ch => {
+                const rows = [];
+                let chCount=0, chCost=0, chAmount=0, chProfit=0;
+                for (const cat of cats) {
+                  if (!agg[ch][cat]) continue;
+                  const c = agg[ch][cat];
+                  chCount += c.count;
+                  chCost += c.cost;
+                  chAmount += c.amount;
+                  chProfit += c.profit;
+                  rows.push(`<tr>
+                    <td style="padding:5px 8px;border:1px solid var(--border);background:#f0fdf4;">${ch}</td>
+                    <td style="padding:5px 8px;border:1px solid var(--border);">${cat}</td>
+                    <td style="padding:5px 8px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${fmt(c.count)}</td>
+                    <td style="padding:5px 8px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${fmt(c.cost)}</td>
+                    <td style="padding:5px 8px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${fmt(c.amount)}</td>
+                    <td style="padding:5px 8px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${fmt(c.profit)}</td>
+                  </tr>`);
+                }
+                rows.push(`<tr style="background:#dbeafe;font-weight:600;">
+                  <td colspan="2" style="padding:5px 8px;border:1px solid var(--border);">${ch} 요약</td>
+                  <td style="padding:5px 8px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${fmt(chCount)}</td>
+                  <td style="padding:5px 8px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${fmt(chCost)}</td>
+                  <td style="padding:5px 8px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${fmt(chAmount)}</td>
+                  <td style="padding:5px 8px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${fmt(chProfit)}</td>
+                </tr>`);
+                return rows;
+              }).join('')}
+              <tr style="background:#fef3c7;font-weight:700;">
+                <td colspan="2" style="padding:6px 8px;border:1px solid var(--border);">총합계</td>
+                <td style="padding:6px 8px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${fmt(totalCount)}</td>
+                <td style="padding:6px 8px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${fmt(totalCost)}</td>
+                <td style="padding:6px 8px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${fmt(totalAmount)}</td>
+                <td style="padding:6px 8px;border:1px solid var(--border);text-align:right;font-variant-numeric:tabular-nums;">${fmt(totalProfit)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div style="margin-top:16px;padding:12px;background:#fff7ed;border-radius:6px;font-size:12px;line-height:1.6;color:#92400e;">
+          <strong>📌 사용 방법:</strong><br>
+          1. 위 표를 ERP 피벗표와 한 줄씩 비교 — 어느 채널/구분에서 차이나는지 확인<br>
+          2. 차이 있는 경우 CSV 다운로드 → ERP raw 데이터와 비교해서 누락/중복 트랜잭션 찾기<br>
+          3. 컴퓨존은 전체 view에서 제외되므로 컴퓨존 매출은 위 표에는 포함되지만 대시보드 KPI에는 별도
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  modal.addEventListener('click', evt => {
+    if (evt.target === modal || evt.target.closest('.modal-close-btn')) {
+      URL.revokeObjectURL(csvUrl);
+      modal.remove();
+    }
+  });
+}
 
 document.getElementById('btnClear').addEventListener('click', () => {
   if (!confirm('정말 모든 데이터를 삭제하시겠습니까?')) return;
