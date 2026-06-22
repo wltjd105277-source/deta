@@ -1569,9 +1569,51 @@ function processSalesStatus(filename, wb) {
   const rows = sheetRows(ws);
   if (rows.length < 3) throw new Error(`${filename}: 판매현황 데이터가 비어있음`);
 
+  // ───── 헤더 기반 컬럼 매핑 (ERP 포맷 변경에 견딘 dynamic 매핑) ─────
+  // 새 ERP는 [3]에 '거래처코드' 컬럼이 추가되어 desc/model/qty 등이 1씩 밀림.
+  // 헤더 행(rows[1])을 보고 컬럼 위치를 자동 탐지.
+  const headerRow = (rows[1] || []).map(c => String(c || '').replace(/\s+/g, ''));
+  const findCol = (...keywords) => {
+    for (const kw of keywords) {
+      for (let i = 0; i < headerRow.length; i++) {
+        if (headerRow[i].includes(kw)) return i;
+      }
+    }
+    return -1;
+  };
+  const COL = {
+    date: findCol('연/월/일', '일자'),
+    item_code: findCol('품목코드'),
+    shop: findCol('판매처', '판1매처'),    // ERP 오타: '판1매처명'
+    desc: findCol('품명'),
+    model: findCol('모델명'),
+    qty: findCol('수량'),
+    unit_price: findCol('단가'),
+    amount: findCol('공급가액'),
+    vat: findCol('부가세'),
+    total: findCol('합계', '합 계'),
+    cost_unit: findCol('입고단가'),
+    warehouse: findCol('창고'),
+    group_name: findCol('품목그룹'),
+    remark: findCol('비고', '발송수단'),
+  };
+  // 폴백 (헤더 못 찾으면 옛 인덱스 사용)
+  if (COL.date < 0) COL.date = 0;
+  if (COL.item_code < 0) COL.item_code = 1;
+  if (COL.shop < 0) COL.shop = 2;
+  if (COL.desc < 0) COL.desc = 3;
+  if (COL.model < 0) COL.model = 4;
+  if (COL.qty < 0) COL.qty = 5;
+  if (COL.amount < 0) COL.amount = 7;
+  if (COL.vat < 0) COL.vat = 8;
+  if (COL.total < 0) COL.total = 9;
+  if (COL.cost_unit < 0) COL.cost_unit = 10;
+  if (COL.warehouse < 0) COL.warehouse = 11;
+  if (COL.group_name < 0) COL.group_name = 13;
+  if (COL.remark < 0) COL.remark = 14;
+  console.log('[판매현황] 헤더 매핑:', COL);
+
   // 트랜잭션 단위로 (날짜, 그룹) 분류
-  //   기존: 헤더 한 줄로 전체 그룹 결정 → 섞인 데이터 시 일부 누락
-  //   변경: 트랜잭션의 판매처(shop)별로 channelMap → group 판별 → 자동 분리
   const txnsByDateGroup = {};  // {date: {group: [txns]}}
   const headerText = String(rows[0]?.[0] || '');
   let defaultGroup = null;
@@ -1580,8 +1622,8 @@ function processSalesStatus(filename, wb) {
 
   for (let i = 2; i < rows.length; i++) {
     const r = rows[i];
-    if (!r || !r[0]) continue;
-    const f = String(r[0]);
+    if (!r || !r[COL.date]) continue;
+    const f = String(r[COL.date]);
     if (f.includes('계') || f.includes('합계') || f.includes('오전') || f.includes('오후')) continue;
 
     const dm = f.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})(?:-(\d+))?/);
@@ -1589,46 +1631,40 @@ function processSalesStatus(filename, wb) {
     const dateStr = `${dm[1]}-${dm[2].padStart(2,'0')}-${dm[3].padStart(2,'0')}`;
     const txnId = dm[4] || '';
 
-    let model = String(r[4] || '').trim();
-    // 모델 필드가 설명형 텍스트면 (공백 포함 / 대괄호 포함 / 길이 긺)
-    // 끝의 [LS-XXX] 패턴을 추출해서 짧은 모델코드로 정규화
-    //   예) "[LANstar] 원터치 모기장 싱글/슈퍼싱글 ... [LS-FROG]" → "LS-FROG"
-    //   예) "LS-FROG" → "LS-FROG" (변동 없음)
+    let model = String(r[COL.model] || '').trim();
+    // 모델 필드 끝의 [LS-XXX] 패턴 추출
     const _modelEnd = model.match(/\[([A-Z][A-Za-z0-9\-_]+)\]\s*$/);
     if (_modelEnd) {
       model = _modelEnd[1];
-    } else if (!model && r[3]) {
-      // 모델 필드 비어있으면 설명(품명)에서 추출 시도
-      const m = String(r[3]).match(/\[([A-Z][A-Za-z0-9\-_]+)\]\s*$/);
+    } else if (!model && r[COL.desc]) {
+      const m = String(r[COL.desc]).match(/\[([A-Z][A-Za-z0-9\-_]+)\]\s*$/);
       if (m) model = m[1];
     }
-    const shop = r[2] || '';
-    const remark = r[14] || '';
+    const shop = r[COL.shop] || '';
+    const remark = r[COL.remark] || '';
     const ch = channelMap(shop, remark);
-    // 채널 → 그룹. 매핑 안 된 채널은 헤더 기반 default 또는 '쿠팡'으로 폴백
     let txnGroup = channelToGroup(ch) || defaultGroup;
     if (!txnGroup) {
-      // 마지막 폴백: 판매처명 키워드로 추측
       if (/컴퓨존|compuzone/i.test(shop)) txnGroup = '컴퓨존';
       else if (/쿠팡|포워드/.test(shop)) txnGroup = '쿠팡';
       else if (/샵N|엔에이치엔|스마트스토어/.test(shop)) txnGroup = '샵N';
-      else txnGroup = '쿠팡';  // 최종 default
+      else txnGroup = '쿠팡';
     }
 
     const txn = {
       txn_id: txnId,
-      item_code: r[1] || '',
+      item_code: r[COL.item_code] || '',
       shop: shop,
-      desc: r[3] || '',
+      desc: r[COL.desc] || '',
       model: model,
-      qty: r[5] || 0,
-      amount: r[7] || 0,
-      vat: r[8] || 0,
-      total: r[9] || 0,
-      cost_unit: r[10] || 0,
-      warehouse: r[11] || '',  // 창고
-      group_name: r[13] || '',
-      remark: r[14] || '',  // 발송수단 및 비고사항 (컴퓨존 가산재고/용산출고 분류용)
+      qty: r[COL.qty] || 0,
+      amount: r[COL.amount] || 0,   // 공급가액 = 납품가
+      vat: r[COL.vat] || 0,
+      total: r[COL.total] || 0,
+      cost_unit: r[COL.cost_unit] || 0,
+      warehouse: r[COL.warehouse] || '',
+      group_name: r[COL.group_name] || '',
+      remark: r[COL.remark] || '',
     };
     if (!txnsByDateGroup[dateStr]) txnsByDateGroup[dateStr] = {};
     if (!txnsByDateGroup[dateStr][txnGroup]) txnsByDateGroup[dateStr][txnGroup] = [];
