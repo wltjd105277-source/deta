@@ -1588,8 +1588,16 @@ function processSalesStatus(filename, wb) {
     const dateStr = `${dm[1]}-${dm[2].padStart(2,'0')}-${dm[3].padStart(2,'0')}`;
     const txnId = dm[4] || '';
 
-    let model = r[4] || '';
-    if (!model && r[3]) {
+    let model = String(r[4] || '').trim();
+    // 모델 필드가 설명형 텍스트면 (공백 포함 / 대괄호 포함 / 길이 긺)
+    // 끝의 [LS-XXX] 패턴을 추출해서 짧은 모델코드로 정규화
+    //   예) "[LANstar] 원터치 모기장 싱글/슈퍼싱글 ... [LS-FROG]" → "LS-FROG"
+    //   예) "LS-FROG" → "LS-FROG" (변동 없음)
+    const _modelEnd = model.match(/\[([A-Z][A-Za-z0-9\-_]+)\]\s*$/);
+    if (_modelEnd) {
+      model = _modelEnd[1];
+    } else if (!model && r[3]) {
+      // 모델 필드 비어있으면 설명(품명)에서 추출 시도
       const m = String(r[3]).match(/\[([A-Z][A-Za-z0-9\-_]+)\]\s*$/);
       if (m) model = m[1];
     }
@@ -4954,6 +4962,35 @@ if (searchInput) {
   if (typeof rebuildAllSlotsFromTransactions === 'function') {
     rebuildAllSlotsFromTransactions();
   }
+})();
+// ─── 트랜잭션 t.model 정규화 마이그레이션 (긴 설명형 → [LS-XXX]) ───
+(function migrateModelName() {
+  const FLAG = 'migrated_model_v1';
+  if (localStorage.getItem(FLAG)) return;
+  let touched = 0;
+  for (const d of Object.keys(store)) {
+    for (const cg of Object.keys(store[d] || {})) {
+      const slot = store[d][cg];
+      if (!slot || !Array.isArray(slot._transactions)) continue;
+      slot._transactions.forEach(t => {
+        const orig = String(t.model || '').trim();
+        if (!orig) return;
+        const m = orig.match(/\[([A-Z][A-Za-z0-9\-_]+)\]\s*$/);
+        if (m && m[1] !== orig) {
+          t.model = m[1];
+          touched++;
+        }
+      });
+    }
+  }
+  if (touched > 0) {
+    saveStore();
+    console.log(`[migration] 트랜잭션 모델명 ${touched}건 정규화`);
+    if (typeof rebuildAllSlotsFromTransactions === 'function') {
+      rebuildAllSlotsFromTransactions();
+    }
+  }
+  localStorage.setItem(FLAG, '1');
 })();
 recomputeAggregates();
 const dates = Object.keys(store).sort();
